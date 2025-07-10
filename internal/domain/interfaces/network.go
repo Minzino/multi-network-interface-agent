@@ -2,7 +2,7 @@ package interfaces
 
 import (
 	"context"
-	"multinic-agent-v2/internal/domain/entities"
+	"multinic-agent/internal/domain/entities"
 )
 
 // NetworkConfigurer는 네트워크 설정을 적용하는 인터페이스입니다

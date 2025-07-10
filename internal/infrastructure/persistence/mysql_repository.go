@@ -4,21 +4,21 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"multinic-agent-v2/internal/domain/entities"
-	"multinic-agent-v2/internal/domain/errors"
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/entities"
+	"multinic-agent/internal/domain/errors"
+	"multinic-agent/internal/domain/interfaces"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/sirupsen/logrus"
 )
 
-// MySQLRepository는 MySQL 기반의 NetworkInterfaceRepository 구현체입니다
+// MySQLRepository is a MySQL-based implementation of NetworkInterfaceRepository
 type MySQLRepository struct {
 	db     *sql.DB
 	logger *logrus.Logger
 }
 
-// NewMySQLRepository는 새로운 MySQLRepository를 생성합니다
+// NewMySQLRepository creates a new MySQLRepository
 func NewMySQLRepository(db *sql.DB, logger *logrus.Logger) interfaces.NetworkInterfaceRepository {
 	return &MySQLRepository{
 		db:     db,
@@ -226,7 +226,7 @@ func (r *MySQLRepository) GetInterfaceByID(ctx context.Context, id int) (*entiti
 		iface.CIDR = cidr.String
 	}
 
-	// 상태 매핑
+	// Status mapping
 	switch netplanSuccess {
 	case 1:
 		iface.Status = entities.StatusConfigured
@@ -284,7 +284,7 @@ func (r *MySQLRepository) GetActiveInterfaces(ctx context.Context, nodeName stri
 			iface.CIDR = cidr.String
 		}
 
-		// 상태 매핑
+		// Status mapping
 		switch netplanSuccess {
 		case 1:
 			iface.Status = entities.StatusConfigured
@@ -350,7 +350,7 @@ func (r *MySQLRepository) GetAllNodeInterfaces(ctx context.Context, nodeName str
 			iface.CIDR = cidr.String
 		}
 
-		// 상태 매핑
+		// Status mapping
 		switch netplanSuccess {
 		case 1:
 			iface.Status = entities.StatusConfigured

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"multinic-agent-v2/internal/domain/errors"
+	"multinic-agent/internal/domain/errors"
 	"os"
 	"strconv"
 	"time"

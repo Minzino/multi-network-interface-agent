@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"multinic-agent-v2/internal/domain/entities"
-	"multinic-agent-v2/internal/domain/interfaces"
-	"multinic-agent-v2/internal/domain/services"
+	"multinic-agent/internal/domain/entities"
+	"multinic-agent/internal/domain/interfaces"
+	"multinic-agent/internal/domain/services"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"

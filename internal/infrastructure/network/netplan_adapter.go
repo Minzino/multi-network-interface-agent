@@ -3,9 +3,9 @@ package network
 import (
 	"context"
 	"fmt"
-	"multinic-agent-v2/internal/domain/entities"
-	"multinic-agent-v2/internal/domain/errors"
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/entities"
+	"multinic-agent/internal/domain/errors"
+	"multinic-agent/internal/domain/interfaces"
 	"path/filepath"
 	"strconv"
 	"strings"

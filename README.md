@@ -1,4 +1,4 @@
-# MultiNIC Agent v2
+# MultiNIC Agent
 
 > **Kubernetes 클러스터 네트워크 인터페이스 완전 자동화 에이전트**
 
@@ -213,7 +213,7 @@ JSON 구조화 로깅 사용:
 ### 프로젝트 구조
 
 ```
-multinic-agent-v2/
+multinic-agent/
 ├── cmd/agent/          # 메인 애플리케이션
 ├── internal/           # 클린 아키텍처
 │   ├── domain/         # 비즈니스 로직

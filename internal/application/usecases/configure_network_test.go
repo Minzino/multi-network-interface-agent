@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"multinic-agent-v2/internal/domain/entities"
-	domainErrors "multinic-agent-v2/internal/domain/errors"
-	"multinic-agent-v2/internal/domain/services"
+	"multinic-agent/internal/domain/entities"
+	domainErrors "multinic-agent/internal/domain/errors"
+	"multinic-agent/internal/domain/services"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"

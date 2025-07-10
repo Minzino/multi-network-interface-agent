@@ -1,8 +1,8 @@
-# MultiNIC Agent v2 프로젝트 분석
+# MultiNIC Agent 프로젝트 분석
 
 ## 프로젝트 개요
 
-MultiNIC Agent v2는 Kubernetes 클러스터에 조인된 노드들의 네트워크 인터페이스 설정을 자동으로 관리하는 Go 기반의 DaemonSet 에이전트입니다.
+MultiNIC Agent는 Kubernetes 클러스터에 조인된 노드들의 네트워크 인터페이스 설정을 자동으로 관리하는 Go 기반의 DaemonSet 에이전트입니다.
 
 ### 주요 특징
 - 데이터베이스 기반 설정 관리 (MySQL/MariaDB)
@@ -51,7 +51,7 @@ MultiNIC Agent v2는 Kubernetes 클러스터에 조인된 노드들의 네트워
 
 ### 현재 구조 (리팩터링 진행 중)
 ```
-multinic-agent-v2/
+multinic-agent/
 ├── cmd/agent/          # 메인 애플리케이션
 │   └── main.go         # 진입점
 ├── internal/           # 클린 아키텍처 구조 (NEW)
@@ -510,7 +510,7 @@ Error 1054 (42S22): Unknown column 'ip_address' in 'field list'
 
 ### 프로젝트 구조 (최종)
 ```
-multinic-agent-v2/
+multinic-agent/
 ├── cmd/agent/
 │   └── main.go              # 단일 진입점
 ├── internal/                # 클린 아키텍처 구조

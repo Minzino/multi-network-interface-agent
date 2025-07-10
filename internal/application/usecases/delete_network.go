@@ -3,8 +3,8 @@ package usecases
 import (
 	"context"
 	"fmt"
-	"multinic-agent-v2/internal/domain/interfaces"
-	"multinic-agent-v2/internal/domain/services"
+	"multinic-agent/internal/domain/interfaces"
+	"multinic-agent/internal/domain/services"
 	"strings"
 
 	"github.com/sirupsen/logrus"
