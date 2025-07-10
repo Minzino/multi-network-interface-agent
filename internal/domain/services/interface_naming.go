@@ -3,8 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
-	"multinic-agent-v2/internal/domain/entities"
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/entities"
+	"multinic-agent/internal/domain/interfaces"
 	"regexp"
 	"strings"
 	"time"

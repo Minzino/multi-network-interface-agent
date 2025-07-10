@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"multinic-agent-v2/internal/application/usecases"
-	"multinic-agent-v2/internal/infrastructure/config"
-	"multinic-agent-v2/internal/infrastructure/container"
+	"multinic-agent/internal/application/usecases"
+	"multinic-agent/internal/infrastructure/config"
+	"multinic-agent/internal/infrastructure/container"
 
 	"github.com/sirupsen/logrus"
 )

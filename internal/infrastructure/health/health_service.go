@@ -3,7 +3,7 @@ package health
 import (
 	"encoding/json"
 	"fmt"
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/interfaces"
 	"net/http"
 	"sync"
 	"time"

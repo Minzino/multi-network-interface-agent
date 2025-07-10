@@ -2,14 +2,14 @@ package container
 
 import (
 	"database/sql"
-	"multinic-agent-v2/internal/application/usecases"
-	"multinic-agent-v2/internal/domain/interfaces"
-	"multinic-agent-v2/internal/domain/services"
-	"multinic-agent-v2/internal/infrastructure/adapters"
-	"multinic-agent-v2/internal/infrastructure/config"
-	"multinic-agent-v2/internal/infrastructure/health"
-	"multinic-agent-v2/internal/infrastructure/network"
-	"multinic-agent-v2/internal/infrastructure/persistence"
+	"multinic-agent/internal/application/usecases"
+	"multinic-agent/internal/domain/interfaces"
+	"multinic-agent/internal/domain/services"
+	"multinic-agent/internal/infrastructure/adapters"
+	"multinic-agent/internal/infrastructure/config"
+	"multinic-agent/internal/infrastructure/health"
+	"multinic-agent/internal/infrastructure/network"
+	"multinic-agent/internal/infrastructure/persistence"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/sirupsen/logrus"

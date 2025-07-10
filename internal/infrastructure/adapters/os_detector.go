@@ -3,8 +3,8 @@ package adapters
 import (
 	"bufio"
 	"fmt"
-	"multinic-agent-v2/internal/domain/errors"
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/errors"
+	"multinic-agent/internal/domain/interfaces"
 	"strings"
 )
 

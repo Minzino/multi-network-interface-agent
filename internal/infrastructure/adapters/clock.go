@@ -1,7 +1,7 @@
 package adapters
 
 import (
-	"multinic-agent-v2/internal/domain/interfaces"
+	"multinic-agent/internal/domain/interfaces"
 	"time"
 )
 

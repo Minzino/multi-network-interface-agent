@@ -2,7 +2,7 @@ package interfaces
 
 import (
 	"context"
-	"multinic-agent-v2/internal/domain/entities"
+	"multinic-agent/internal/domain/entities"
 )
 
 // NetworkInterfaceRepository는 네트워크 인터페이스 저장소 인터페이스입니다

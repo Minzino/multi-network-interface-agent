@@ -1,4 +1,4 @@
-module multinic-agent-v2
+module multinic-agent
 
 go 1.21
 
