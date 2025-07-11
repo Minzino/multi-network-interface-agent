@@ -34,16 +34,11 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 
 // GenerateNextName은 사용 가능한 다음 인터페이스 이름을 생성합니다
 func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
-	for i := 0; i < 10; i++ {
-		name := fmt.Sprintf("multinic%d", i)
-
-		// 이미 사용 중인지 확인
-		if !s.isInterfaceInUse(name) {
-			return entities.NewInterfaceName(name)
-		}
-	}
-
-	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
+	// RHEL의 경우 nmcli 연결 목록도 확인
+	ctx := context.Background()
+	nmcliConnections, _ := s.ListNmcliConnectionNames(ctx)
+	
+	return s.GenerateNextNameForOS(nmcliConnections)
 }
 
 // GenerateNextNameForOS는 OS에 따라 사용 가능한 다음 이름을 생성합니다

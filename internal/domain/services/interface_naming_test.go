@@ -150,6 +150,8 @@ func TestInterfaceNamingService_GenerateNextName(t *testing.T) {
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
 			// RHEL nmcli 명령어 mocks (naming service에서 사용)
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			// 컨테이너 환경에서 nsenter 사용하는 경우도 대비
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
 			result, err := service.GenerateNextName()
 
@@ -193,6 +195,9 @@ func TestInterfaceNamingService_isInterfaceInUse(t *testing.T) {
 			mockExecutor := new(MockCommandExecutor)
 			// 기본 컨테이너 환경 체크 설정
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			expectedPath := fmt.Sprintf("/sys/class/net/%s", tt.interfaceName)
 			mockFS.On("Exists", expectedPath).Return(tt.exists)
 
@@ -262,6 +267,9 @@ func TestInterfaceNamingService_GetCurrentMultinicInterfaces_SystemBased(t *test
 			mockExecutor := new(MockCommandExecutor)
 			// 기본 컨테이너 환경 체크 설정
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			tt.setupMock(mockFS)
 
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
@@ -341,6 +349,9 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 			mockExecutor := new(MockCommandExecutor)
 			// 기본 컨테이너 환경 체크 설정
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			tt.setupMock(mockFS, mockExecutor)
 
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
