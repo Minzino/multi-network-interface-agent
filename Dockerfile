@@ -13,7 +13,10 @@ RUN go build -o multinic-agent cmd/agent/main.go
 # 실행 스테이지
 FROM alpine:3.18
 
-RUN apk add --no-cache ca-certificates networkmanager
+# 필요한 도구들 설치 (nsenter는 util-linux 패키지에 포함됨)
+RUN apk add --no-cache \
+    ca-certificates \
+    util-linux
 
 WORKDIR /app
 COPY --from=builder /app/multinic-agent .

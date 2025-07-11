@@ -14,13 +14,21 @@ import (
 type InterfaceNamingService struct {
 	fileSystem      interfaces.FileSystem
 	commandExecutor interfaces.CommandExecutor
+	isContainer     bool // indicates if running in container
 }
 
 // NewInterfaceNamingService는 새로운 InterfaceNamingService를 생성합니다
 func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.CommandExecutor) *InterfaceNamingService {
+	// Check if running in container by checking if /host exists
+	isContainer := false
+	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
+		isContainer = true
+	}
+	
 	return &InterfaceNamingService{
 		fileSystem:      fs,
 		commandExecutor: executor,
+		isContainer:     isContainer,
 	}
 }
 
@@ -102,9 +110,21 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	return matches[1], nil
 }
 
+// execNmcli is a helper method to execute nmcli commands with nsenter if in container
+func (s *InterfaceNamingService) execNmcli(ctx context.Context, args ...string) ([]byte, error) {
+	if s.isContainer {
+		// In container environment, use nsenter to run in host namespace
+		cmdArgs := []string{"--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli"}
+		cmdArgs = append(cmdArgs, args...)
+		return s.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nsenter", cmdArgs...)
+	}
+	// Direct execution on host
+	return s.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", args...)
+}
+
 // ListNmcliConnectionNames는 nmcli에 설정된 모든 연결 프로파일 이름을 반환합니다.
 func (s *InterfaceNamingService) ListNmcliConnectionNames(ctx context.Context) ([]string, error) {
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "nmcli", "-t", "-f", "NAME", "c", "show")
+	output, err := s.execNmcli(ctx, "-t", "-f", "NAME", "c", "show")
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute nmcli connection show: %w", err)
 	}
@@ -134,7 +154,7 @@ func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) 
 // GetNmcliConnectionMAC는 nmcli connection에서 MAC 주소를 조회합니다
 func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, connName string) (string, error) {
 	// nmcli -t -f 802-3-ethernet.mac-address connection show {connName}
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "nmcli", "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
+	output, err := s.execNmcli(ctx, "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get MAC address for connection %s: %w", connName, err)
 	}

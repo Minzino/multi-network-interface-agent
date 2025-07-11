@@ -166,7 +166,11 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	deleteOutput, err := a.deleteUseCase.Execute(ctx, deleteInput)
 	if err != nil {
 		a.logger.WithError(err).Error("Failed to process orphaned interface deletion")
-		// 삭제 실패는 치명적이지 않으므로 계속 진행
+		// 삭제 실패는 치명적이지 않으므로 빈 결과로 초기화
+		deleteOutput = &usecases.DeleteNetworkOutput{
+			TotalDeleted: 0,
+			Errors:       []error{err},
+		}
 	}
 
 	// 헬스체크 통계 업데이트 (설정 관련)
@@ -179,13 +183,20 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	}
 
 	// 실제로 처리된 것이 있을 때만 로그 출력
-	if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || deleteOutput.TotalDeleted > 0 {
+	if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || (deleteOutput != nil && deleteOutput.TotalDeleted > 0) {
+		deletedTotal := 0
+		deleteErrors := 0
+		if deleteOutput != nil {
+			deletedTotal = deleteOutput.TotalDeleted
+			deleteErrors = len(deleteOutput.Errors)
+		}
+		
 		a.logger.WithFields(logrus.Fields{
 			"config_processed": configOutput.ProcessedCount,
 			"config_failed":    configOutput.FailedCount,
 			"config_total":     configOutput.TotalCount,
-			"deleted_total":    deleteOutput.TotalDeleted,
-			"delete_errors":    len(deleteOutput.Errors),
+			"deleted_total":    deletedTotal,
+			"delete_errors":    deleteErrors,
 		}).Info("Network processing completed")
 	}
 
