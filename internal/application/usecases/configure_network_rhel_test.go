@@ -63,6 +63,29 @@ method=disabled
 			},
 			expectError: false,
 		},
+		{
+			name: "여러 IP 주소가 있는 nmconnection 파일 파싱",
+			fileContent: `[connection]
+id=multinic2
+type=ethernet
+
+[ethernet]
+mac-address=FA:16:3E:AA:BB:CC
+mtu=1400
+
+[ipv4]
+method=manual
+address1=192.168.1.100/24
+address2=10.0.0.100/16
+`,
+			expectedConfig: &NmConnectionConfig{
+				MacAddress: "FA:16:3E:AA:BB:CC",
+				MTU:        1400,
+				Addresses:  []string{"192.168.1.100/24", "10.0.0.100/16"},
+				Method:     "manual",
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {

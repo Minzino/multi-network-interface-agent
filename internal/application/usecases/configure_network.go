@@ -414,11 +414,20 @@ func (uc *ConfigureNetworkUseCase) parseNmConnectionFile(filePath string) (*NmCo
 			}
 		case "method":
 			config.Method = value
-		case "address1", "addresses":
-			// Handle multiple address formats
-			addresses := strings.Split(value, ";")
-			for _, addr := range addresses {
-				addr = strings.TrimSpace(addr)
+		case "address1", "address2", "address3", "address4", "address5", "addresses":
+			// Handle multiple address formats (address1, address2, etc. and legacy addresses)
+			if key == "addresses" {
+				// Legacy format with semicolon separator
+				addresses := strings.Split(value, ";")
+				for _, addr := range addresses {
+					addr = strings.TrimSpace(addr)
+					if addr != "" {
+						config.Addresses = append(config.Addresses, addr)
+					}
+				}
+			} else {
+				// Modern format (address1, address2, etc.)
+				addr := strings.TrimSpace(value)
 				if addr != "" {
 					config.Addresses = append(config.Addresses, addr)
 				}

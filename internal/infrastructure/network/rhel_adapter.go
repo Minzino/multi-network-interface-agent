@@ -106,9 +106,9 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 			prefix := parts[1]
 			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
 			
-			setIPCmd := []string{"connection", "modify", ifaceName, "ipv4.method", "manual", "ipv4.addresses", fullAddress}
+			setIPCmd := []string{"connection", "modify", ifaceName, "ipv4.method", "manual", "ipv4.address", fullAddress}
 			if err := execNmcli(setIPCmd...); err != nil {
-				return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.addresses configuration failed: %s", ifaceName), err)
+				return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.address configuration failed: %s", ifaceName), err)
 			}
 			
 			a.logger.WithFields(logrus.Fields{
