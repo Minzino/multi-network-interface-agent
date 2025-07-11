@@ -47,11 +47,6 @@ func (f *NetworkManagerFactory) CreateNetworkConfigurer() (interfaces.NetworkCon
 			f.logger,
 		), nil
 
-	case interfaces.OSTypeSUSE:
-		// If SUSE adapter is needed, add implementation here.
-		// Currently focusing on RHEL/Ubuntu.
-		return nil, errors.NewSystemError("SUSE adapter is not currently implemented", nil)
-
 	case interfaces.OSTypeRHEL:
 		return NewRHELAdapter(
 			f.commandExecutor,

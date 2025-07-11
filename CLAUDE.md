@@ -6,7 +6,7 @@ MultiNIC Agent는 Kubernetes 클러스터에 조인된 노드들의 네트워크
 
 ### 주요 특징
 - 데이터베이스 기반 설정 관리 (MySQL/MariaDB)
-- Ubuntu (Netplan) 및 SUSE (Wicked) 지원
+- Ubuntu (Netplan) 및 RHEL/CentOS (nmcli) 지원
 - 자동 롤백 기능
 - multinic0 ~ multinic9 인터페이스 관리 (최대 10개)
 - 기존 네트워크 인터페이스 (eth0, ens* 등) 보호
@@ -132,12 +132,11 @@ type NetworkManager interface {
   - 컨테이너 환경에서 `nsenter` 사용
   - YAML 기반 설정
 
-**SUSE (Wicked)**
-- 설정 파일: `/etc/sysconfig/network/ifcfg-{interface}`
-- 백업 경로: `/var/lib/multinic/wicked-backups`
+**RHEL/CentOS (nmcli)**
+- 설정 방식: NetworkManager CLI (nmcli) 사용
 - 특징:
-  - `wicked ifup` 명령으로 개별 인터페이스 제어
-  - 키-값 쌍 기반 설정
+  - `nmcli connection` 명령으로 연결 프로파일 관리
+  - 파일 기반이 아닌 명령어 기반 설정
 
 ### 3. 데이터베이스 연동 (pkg/db/)
 
@@ -275,7 +274,7 @@ type NetworkManager interface {
    - 설정 로더 (EnvironmentConfigLoader)
    
 2. ✅ **네트워크 관리 시스템 구현**
-   - NetplanManager와 WickedManager 어댑터
+   - NetplanManager와 RHELManager 어댑터
    - 통합된 백업 서비스 (BackupService)
    - 헬스 체크 서비스 (HealthService)
    
@@ -373,7 +372,7 @@ type NetworkManager interface {
 
 ### 학습 포인트
 1. **컨테이너 환경 네트워크 제어**: nsenter를 통한 호스트 네임스페이스 접근
-2. **OS별 네트워크 도구 차이**: Ubuntu Netplan vs SUSE Wicked의 설정 방식 및 명령어
+2. **OS별 네트워크 도구 차이**: Ubuntu Netplan vs RHEL nmcli의 설정 방식 및 명령어
 3. **안전한 네트워크 설정**: 백업/롤백, 타임아웃, 검증을 통한 무중단 변경
 4. **점진적 리팩터링**: 기존 시스템을 유지하면서 새 아키텍처로 전환하는 전략
 5. **도메인 주도 설계**: 비즈니스 로직을 중심으로 한 계층 구조 설계
@@ -478,8 +477,8 @@ Error 1054 (42S22): Unknown column 'ip_address' in 'field list'
      version: 2
    ```
 
-4. **Wicked 설정도 동일하게 단순화**
-   - BOOTPROTO를 'static'에서 'none'으로 변경
+4. **RHEL nmcli 설정도 동일하게 단순화**
+   - ipv4.method를 'disabled'로 설정
    - IP 관련 설정 모두 제거
 
 ## 레거시 코드 정리 (2025-01-08)
@@ -535,7 +534,7 @@ multinic-agent/
 
 2. **네트워크 어댑터에서 백업 로직 제거**
    - NetplanAdapter: 백업 생성/복원 로직 제거
-   - WickedAdapter: 백업 생성/복원 로직 제거
+   - RHELAdapter: 백업 처리 불필요 (nmcli는 파일 기반이 아님)
 
 3. **의존성 주입 구조 단순화**
    - NetworkManagerFactory에서 BackupService 제거
@@ -544,7 +543,7 @@ multinic-agent/
 ### 현재 동작 방식
 - **설정 파일 생성**: 기존 파일이 있으면 단순 덮어쓰기
 - **롤백 처리**: 설정 파일 제거만 수행
-- **에러 처리**: netplan/wicked 명령어 자체의 안전장치 활용
+- **에러 처리**: netplan/nmcli 명령어 자체의 안전장치 활용
 
 ### 장점
 - **성능 향상**: 백업 파일 I/O 제거로 속도 개선

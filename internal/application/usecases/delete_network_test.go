@@ -2,7 +2,6 @@ package usecases
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -109,14 +108,29 @@ func TestDeleteNetworkUseCase_Execute_NmcliCleanup_Success(t *testing.T) {
 
 	mockOSDetector.On("DetectOS").Return(interfaces.OSTypeRHEL, nil)
 
+	// Mock GetActiveInterfaces for RHEL
+	activeInterfaces := []entities.NetworkInterface{
+		{
+			ID:         1,
+			MacAddress: "00:11:22:33:44:55",
+			AttachedNodeName: "rhel-node",
+			Status:    entities.StatusConfigured,
+		},
+	}
+	mockRepository.On("GetActiveInterfaces", ctx, "rhel-node").Return(activeInterfaces, nil)
+
+	// Mock nmcli connection list
 	nmcliConnections := []string{"multinic0", "multinic1"}
 	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", []string{"-t", "-f", "NAME", "c", "show"}).Return([]byte(strings.Join(nmcliConnections, "\n")), nil)
 
-	// For multinic0, the device exists
-	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", []string{"addr", "show", "multinic0"}).Return([]byte("link/ether"), nil)
+	// Mock MAC address retrieval from nmcli
+	// multinic0 has the MAC that exists in DB
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", []string{"-t", "-f", "802-3-ethernet.mac-address", "connection", "show", "multinic0"}).
+		Return([]byte("802-3-ethernet.mac-address:00:11:22:33:44:55"), nil)
 
-	// For multinic1, the device does not exist (it's an orphan)
-	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", []string{"addr", "show", "multinic1"}).Return([]byte(""), errors.New("does not exist"))
+	// multinic1 has a MAC that doesn't exist in DB (orphan)
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", []string{"-t", "-f", "802-3-ethernet.mac-address", "connection", "show", "multinic1"}).
+		Return([]byte("802-3-ethernet.mac-address:AA:BB:CC:DD:EE:FF"), nil)
 
 	mockRollbacker.On("Rollback", ctx, "multinic1").Return(nil)
 

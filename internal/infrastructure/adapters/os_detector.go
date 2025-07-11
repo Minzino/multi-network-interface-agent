@@ -38,9 +38,7 @@ func (d *RealOSDetector) DetectOS() (interfaces.OSType, error) {
 	// OS type determination logic
 	if id == "ubuntu" {
 		return interfaces.OSTypeUbuntu, nil
-	} else if id == "sles" || id == "suse" || strings.Contains(idLike, "suse") {
-		return interfaces.OSTypeSUSE, nil
-	} else if id == "rhel" || id == "centos" || id == "rocky" || id == "almalinux" || strings.Contains(idLike, "fedora") {
+	} else if id == "rhel" || id == "centos" || id == "rocky" || id == "almalinux" || id == "oracle" || strings.Contains(idLike, "rhel") || strings.Contains(idLike, "fedora") {
 		return interfaces.OSTypeRHEL, nil
 	}
 

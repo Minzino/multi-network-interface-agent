@@ -131,6 +131,26 @@ func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) 
 	return files, nil
 }
 
+// GetNmcliConnectionMAC는 nmcli connection에서 MAC 주소를 조회합니다
+func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, connName string) (string, error) {
+	// nmcli -t -f 802-3-ethernet.mac-address connection show {connName}
+	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "nmcli", "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get MAC address for connection %s: %w", connName, err)
+	}
+	
+	// Output format: "802-3-ethernet.mac-address:FA:16:3E:00:BE:63"
+	outputStr := strings.TrimSpace(string(output))
+	parts := strings.Split(outputStr, ":")
+	if len(parts) >= 7 {
+		// Extract MAC address part (last 6 parts)
+		macParts := parts[len(parts)-6:]
+		return strings.Join(macParts, ":"), nil
+	}
+	
+	return "", fmt.Errorf("unexpected output format from nmcli: %s", outputStr)
+}
+
 // GetHostname은 시스템의 호스트네임을 반환합니다
 func (s *InterfaceNamingService) GetHostname() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

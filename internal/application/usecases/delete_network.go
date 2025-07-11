@@ -118,6 +118,19 @@ func (uc *DeleteNetworkUseCase) executeNmcliCleanup(ctx context.Context, input D
 		Errors:            []error{},
 	}
 
+	// DB에서 현재 노드의 활성 인터페이스 조회
+	activeInterfaces, err := uc.repository.GetActiveInterfaces(ctx, input.NodeName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active interfaces from database: %w", err)
+	}
+
+	// MAC 주소 맵 생성 (빠른 조회를 위해)
+	activeMACAddresses := make(map[string]bool)
+	for _, iface := range activeInterfaces {
+		activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+	}
+
+	// nmcli connection 목록 조회
 	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list nmcli connections: %w", err)
@@ -129,16 +142,22 @@ func (uc *DeleteNetworkUseCase) executeNmcliCleanup(ctx context.Context, input D
 			continue
 		}
 
-		exists, err := uc.checkInterfaceExists(ctx, connName)
+		// 해당 connection의 MAC 주소 조회
+		macAddress, err := uc.getMACAddressFromNmcliConnection(ctx, connName)
 		if err != nil {
 			uc.logger.WithFields(logrus.Fields{
 				"connection_name": connName,
-				"error":           err,
-			}).Warn("Error occurred while checking interface existence")
+				"error":           err.Error(),
+			}).Warn("Failed to get MAC address from nmcli connection")
 			continue
 		}
 
-		if !exists {
+		// DB에 해당 MAC 주소가 없으면 고아 연결
+		if macAddress != "" && !activeMACAddresses[strings.ToLower(macAddress)] {
+			uc.logger.WithFields(logrus.Fields{
+				"connection_name": connName,
+				"mac_address":     macAddress,
+			}).Info("Found orphaned nmcli connection")
 			orphanedConnections = append(orphanedConnections, connName)
 		}
 	}
@@ -296,6 +315,17 @@ func (uc *DeleteNetworkUseCase) deleteNetplanFile(ctx context.Context, fileName,
 	}).Info("Successfully deleted orphaned netplan file")
 
 	return nil
+}
+
+// getMACAddressFromNmcliConnection은 nmcli connection에서 MAC 주소를 추출합니다
+func (uc *DeleteNetworkUseCase) getMACAddressFromNmcliConnection(ctx context.Context, connName string) (string, error) {
+	// nmcli connection show {connName} | grep 802-3-ethernet.mac-address
+	output, err := uc.namingService.GetNmcliConnectionMAC(ctx, connName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get MAC address from nmcli connection: %w", err)
+	}
+	
+	return output, nil
 }
 
 // getMACAddressFromNetplanFile은 netplan 파일에서 MAC 주소를 추출합니다

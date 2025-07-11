@@ -57,18 +57,58 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		return errors.NewNetworkError(fmt.Sprintf("nmcli connection add failed: %s", ifaceName), err)
 	}
 
-	// 3. Disable IP address assignment (connect interface only)
-	disableIPv4Cmd := []string{"connection", "modify", ifaceName, "ipv4.method", "disabled"}
-	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", disableIPv4Cmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.method disabled failed: %s", ifaceName), err)
+	// 3. Configure IP settings
+	if iface.Address != "" && iface.CIDR != "" {
+		// Static IP configuration
+		// Extract prefix from CIDR (e.g., "10.0.0.0/24" -> "24")
+		parts := strings.Split(iface.CIDR, "/")
+		if len(parts) == 2 {
+			prefix := parts[1]
+			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
+			
+			setIPCmd := []string{"connection", "modify", ifaceName, "ipv4.method", "manual", "ipv4.addresses", fullAddress}
+			if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", setIPCmd...); err != nil {
+				return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.addresses configuration failed: %s", ifaceName), err)
+			}
+			
+			a.logger.WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"address":   fullAddress,
+			}).Debug("Static IP configured")
+		} else {
+			a.logger.WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"cidr":      iface.CIDR,
+			}).Warn("Invalid CIDR format, skipping IP configuration")
+		}
+	} else {
+		// No IP configuration - disable IP assignment
+		disableIPv4Cmd := []string{"connection", "modify", ifaceName, "ipv4.method", "disabled"}
+		if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", disableIPv4Cmd...); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.method disabled failed: %s", ifaceName), err)
+		}
 	}
-
+	
+	// Always disable IPv6
 	disableIPv6Cmd := []string{"connection", "modify", ifaceName, "ipv6.method", "disabled"}
 	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", disableIPv6Cmd...); err != nil {
 		return errors.NewNetworkError(fmt.Sprintf("nmcli ipv6.method disabled failed: %s", ifaceName), err)
 	}
+	
+	// 4. Set MTU if specified
+	if iface.MTU > 0 {
+		setMTUCmd := []string{"connection", "modify", ifaceName, "ethernet.mtu", fmt.Sprintf("%d", iface.MTU)}
+		if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", setMTUCmd...); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("nmcli MTU configuration failed: %s", ifaceName), err)
+		}
+		
+		a.logger.WithFields(logrus.Fields{
+			"interface": ifaceName,
+			"mtu":       iface.MTU,
+		}).Debug("MTU configured")
+	}
 
-	// 4. Activate connection
+	// 5. Activate connection
 	upCmd := []string{"connection", "up", ifaceName}
 	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", upCmd...); err != nil {
 		// Rollback on activation failure
