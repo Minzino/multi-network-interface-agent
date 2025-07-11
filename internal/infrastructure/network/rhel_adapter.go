@@ -186,28 +186,41 @@ func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName)
 	ifaceName := name.String()
 	a.logger.WithField("interface", ifaceName).Info("Starting nmcli interface validation")
 
-	// Check status using `nmcli device status`
-	// Output example: DEVICE  TYPE      STATE      CONNECTION
-	//           eth0    ethernet  connected  eth0
-	//           multinic0 ethernet  connected  multinic0
-	output, err := a.execNmcli(ctx, "device", "status")
+	// Check connection status using `nmcli connection show`
+	// In RHEL, the device name doesn't change, only the CONNECTION name is multinic0
+	output, err := a.execNmcli(ctx, "connection", "show", "--active")
 	if err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli device status execution failed: %s", ifaceName), err)
+		return errors.NewNetworkError(fmt.Sprintf("nmcli connection show execution failed: %s", ifaceName), err)
 	}
 
+	// Check if our connection is active
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.HasPrefix(line, ifaceName) {
-			fields := strings.Fields(line)
-			if len(fields) >= 3 && fields[2] == "connected" {
-				a.logger.WithField("interface", ifaceName).Info("nmcli interface validation successful")
-				return nil
-			}
-			return errors.NewNetworkError(fmt.Sprintf("Interface %s state is not 'connected': %s", ifaceName, line), nil)
+		fields := strings.Fields(line)
+		// NAME UUID TYPE DEVICE format
+		if len(fields) >= 4 && fields[0] == ifaceName {
+			// Connection is active
+			a.logger.WithFields(logrus.Fields{
+				"connection": ifaceName,
+				"device":     fields[3],
+			}).Info("nmcli connection validation successful")
+			return nil
 		}
 	}
 
-	return errors.NewNetworkError(fmt.Sprintf("Interface %s not found in nmcli device status output", ifaceName), nil)
+	// If not found in active connections, it might have failed to activate
+	// Let's check all connections to see if it exists but is not active
+	allOutput, err := a.execNmcli(ctx, "connection", "show")
+	if err == nil {
+		for _, line := range strings.Split(string(allOutput), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 1 && fields[0] == ifaceName {
+				return errors.NewNetworkError(fmt.Sprintf("Connection %s exists but is not active", ifaceName), nil)
+			}
+		}
+	}
+
+	return errors.NewNetworkError(fmt.Sprintf("Connection %s not found", ifaceName), nil)
 }
 
 // Rollback removes interface configuration using nmcli.
