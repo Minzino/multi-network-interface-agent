@@ -65,15 +65,28 @@ func TestRHELAdapter_Configure(t *testing.T) {
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Find device by MAC - first get device list, then check MAC addresses
+				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+eth1       ethernet  disconnected  --
+lo         loopback  unmanaged  --`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(deviceStatusOutput), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
+					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
+					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				
 				// 1. Delete existing (rollback)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), errors.New("not found")).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				// 2. Add new connection
+				// 2. Add new connection (use eth1 which has the matching MAC)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
-					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "multinic0", "mac", "fa:16:3e:00:be:63").
+					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "eth1").
 					Return([]byte("Connection successfully added"), nil).Once()
 				
 				// 3. Disable IPv4
@@ -97,10 +110,10 @@ func TestRHELAdapter_Configure(t *testing.T) {
 					Return([]byte("Connection successfully activated"), nil).Once()
 				
 				// 7. Validate connection
-				validationOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-multinic0  ethernet  connected  multinic0`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				validationOutput := `NAME      UUID                                  TYPE      DEVICE
+multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(validationOutput), nil).Once()
 			},
 			wantErr: false,
@@ -118,15 +131,28 @@ multinic0  ethernet  connected  multinic0`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Find device by MAC - first get device list, then check MAC addresses
+				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+eth1       ethernet  disconnected  --
+lo         loopback  unmanaged  --`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(deviceStatusOutput), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
+					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
+					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				
 				// 1. Delete existing (rollback)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
 					Return([]byte(""), nil).Once()
 				
-				// 2. Add new connection
+				// 2. Add new connection (use eth1 which has the matching MAC)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
-					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "multinic0", "mac", "fa:16:3e:00:be:63").
+					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "eth1").
 					Return([]byte("Connection successfully added"), nil).Once()
 				
 				// 3. Set static IP
@@ -155,10 +181,10 @@ multinic0  ethernet  connected  multinic0`
 					Return([]byte("Connection successfully activated"), nil).Once()
 				
 				// 8. Validate connection
-				validationOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-multinic0  ethernet  connected  multinic0`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				validationOutput := `NAME      UUID                                  TYPE      DEVICE
+multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(validationOutput), nil).Once()
 			},
 			wantErr: false,
@@ -173,15 +199,28 @@ multinic0  ethernet  connected  multinic0`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Find device by MAC - first get device list, then check MAC addresses
+				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+eth1       ethernet  disconnected  --
+lo         loopback  unmanaged  --`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(deviceStatusOutput), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
+					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
+					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				
 				// Rollback
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
 					Return([]byte(""), nil).Once()
 				
-				// Add fails
+				// Add fails (use eth1 which has the matching MAC)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
-					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "multinic0", "mac", "fa:16:3e:00:be:63").
+					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "eth1").
 					Return([]byte(""), errors.New("nmcli error")).Once()
 			},
 			wantErr:   true,
@@ -197,15 +236,28 @@ multinic0  ethernet  connected  multinic0`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Find device by MAC - first get device list, then check MAC addresses
+				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+eth1       ethernet  disconnected  --
+lo         loopback  unmanaged  --`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(deviceStatusOutput), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
+					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
+					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				
 				// Initial rollback
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
 					Return([]byte(""), nil).Once()
 				
-				// Add succeeds
+				// Add succeeds (use eth1 which has the matching MAC)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
-					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "multinic0", "mac", "fa:16:3e:00:be:63").
+					"connection", "add", "type", "ethernet", "con-name", "multinic0", "ifname", "eth1").
 					Return([]byte(""), nil).Once()
 				
 				// Disable IPv4
@@ -275,11 +327,10 @@ func TestRHELAdapter_Validate(t *testing.T) {
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				output := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-multinic0  ethernet  connected  multinic0
-lo         loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				output := `NAME      UUID                                  TYPE      DEVICE
+multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(output), nil).Once()
 			},
 			wantErr: false,
@@ -290,12 +341,17 @@ lo         loopback  unmanaged  --`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				output := `DEVICE     TYPE      STATE         CONNECTION
-eth0       ethernet  connected     eth0
-multinic0  ethernet  disconnected  --
-lo         loopback  unmanaged     --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				// multinic0 is not in active connections (disconnected)
+				output := `NAME      UUID                                  TYPE      DEVICE
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(output), nil).Once()
+				// Check all connections to see if multinic0 exists but inactive
+				allOutput := `NAME      UUID                                  TYPE      DEVICE
+multinic0 12345678-1234-1234-1234-123456789012  ethernet  --
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
+					Return([]byte(allOutput), nil).Once()
 			},
 			wantErr: true,
 		},
@@ -305,11 +361,16 @@ lo         loopback  unmanaged     --`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				output := `DEVICE  TYPE      STATE      CONNECTION
-eth0    ethernet  connected  eth0
-lo      loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				// multinic0 is not in active connections
+				output := `NAME      UUID                                  TYPE      DEVICE
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(output), nil).Once()
+				// multinic0 is also not in all connections list
+				allOutput := `NAME      UUID                                  TYPE      DEVICE
+eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
+					Return([]byte(allOutput), nil).Once()
 			},
 			wantErr: true,
 		},
@@ -319,7 +380,7 @@ lo      loopback  unmanaged  --`
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show", "--active").
 					Return([]byte(""), errors.New("command failed")).Once()
 			},
 			wantErr: true,

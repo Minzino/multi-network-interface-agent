@@ -127,7 +127,12 @@ func (m *MockCommandExecutor) Execute(ctx context.Context, command string, args 
 }
 
 func (m *MockCommandExecutor) ExecuteWithTimeout(ctx context.Context, timeout time.Duration, command string, args ...string) ([]byte, error) {
-	mockArgs := m.Called(ctx, timeout, command, args)
+	// Convert variadic args to []interface{} for mock.Called
+	callArgs := []interface{}{ctx, timeout, command}
+	for _, arg := range args {
+		callArgs = append(callArgs, arg)
+	}
+	mockArgs := m.Called(callArgs...)
 	return mockArgs.Get(0).([]byte), mockArgs.Error(1)
 }
 
@@ -410,6 +415,10 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 
 			// Mock CommandExecutor 생성
 			mockExecutor := new(MockCommandExecutor)
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks (naming service에서 사용)
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 
 			// 네이밍 서비스 생성
 			namingService := services.NewInterfaceNamingService(mockFS, mockExecutor)
@@ -492,6 +501,11 @@ func TestConfigureNetworkUseCase_processInterface(t *testing.T) {
 
 			// Mock 설정
 			tt.setupMocks(mockConfigurer, mockRollbacker, mockFS)
+
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks (naming service에서 사용)
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 
 			// 네이밍 서비스 생성
 			namingService := services.NewInterfaceNamingService(mockFS, mockExecutor)
