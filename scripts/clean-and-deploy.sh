@@ -30,14 +30,14 @@ for node in "${ALL_NODES[@]}"; do
     echo -e "  - Podman 이미지 제거 중..."
     sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "
         # Podman에서 multinic 관련 이미지 모두 제거
-        sudo podman images | grep -E 'multinic|MULTINIC' | awk '{print \$3}' | xargs -r sudo podman rmi -f || true
+        podman images | grep -E 'multinic|MULTINIC' | awk '{print \$3}' | xargs -r podman rmi -f || true
     " 2>/dev/null || echo -e "${YELLOW}  ⚠️  Podman 이미지 제거 실패 (계속 진행)${NC}"
     
     # nerdctl 이미지 제거
     echo -e "  - Nerdctl 이미지 제거 중..."
     sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "
         # Nerdctl에서 multinic 관련 이미지 모두 제거
-        sudo nerdctl --namespace=k8s.io images | grep -E 'multinic|MULTINIC' | awk '{print \$3}' | xargs -r sudo nerdctl --namespace=k8s.io rmi -f || true
+        nerdctl --namespace=k8s.io images | grep -E 'multinic|MULTINIC' | awk '{print \$3}' | xargs -r nerdctl --namespace=k8s.io rmi -f || true
     " 2>/dev/null || echo -e "${YELLOW}  ⚠️  Nerdctl 이미지 제거 실패 (계속 진행)${NC}"
     
     echo -e "${GREEN}✓ $node 노드 정리 완료${NC}"
@@ -46,10 +46,10 @@ done
 # 2. 로컬에서도 이미지 정리
 echo -e "\n${BLUE}🗑️  2단계: 로컬 이미지 정리${NC}"
 echo -e "${YELLOW}로컬 Podman 이미지 제거 중...${NC}"
-sudo podman images | grep -E 'multinic|MULTINIC' | awk '{print $3}' | xargs -r sudo podman rmi -f || true
+podman images | grep -E 'multinic|MULTINIC' | awk '{print $3}' | xargs -r podman rmi -f || true
 
 echo -e "${YELLOW}로컬 Nerdctl 이미지 제거 중...${NC}"
-sudo nerdctl --namespace=k8s.io images | grep -E 'multinic|MULTINIC' | awk '{print $3}' | xargs -r sudo nerdctl --namespace=k8s.io rmi -f || true
+nerdctl --namespace=k8s.io images | grep -E 'multinic|MULTINIC' | awk '{print $3}' | xargs -r nerdctl --namespace=k8s.io rmi -f || true
 
 echo -e "${GREEN}✓ 로컬 이미지 정리 완료${NC}"
 
@@ -65,8 +65,8 @@ echo -e "\n${BLUE}📊 4단계: 이미지 상태 확인${NC}"
 for node in "${ALL_NODES[@]}"; do
     echo -e "\n${YELLOW}=== $node 노드 ===${NC}"
     echo -e "${BLUE}Nerdctl 이미지:${NC}"
-    sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "sudo nerdctl --namespace=k8s.io images | grep -E 'multinic|NAME' || echo 'No images found'" 2>/dev/null || echo -e "${RED}접근 실패${NC}"
+    sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "nerdctl --namespace=k8s.io images | grep -E 'multinic|NAME' || echo 'No images found'" 2>/dev/null || echo -e "${RED}접근 실패${NC}"
     
     echo -e "${BLUE}Podman 이미지:${NC}"
-    sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "sudo podman images | grep -E 'multinic|REPOSITORY' || echo 'No images found'" 2>/dev/null || echo -e "${RED}접근 실패${NC}"
+    sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "podman images | grep -E 'multinic|REPOSITORY' || echo 'No images found'" 2>/dev/null || echo -e "${RED}접근 실패${NC}"
 done

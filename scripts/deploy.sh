@@ -201,8 +201,8 @@ for node in "${ALL_NODES[@]}"; do
         # nerdctl만 사용하도록 고정
         echo -e "${BLUE}INFO: nerdctl을 사용하여 이미지 로드${NC}"
         
-        # nerdctl로 이미지 로드
-        LOAD_COMMAND="sudo nerdctl --namespace=k8s.io load -i /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar && rm /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
+        # nerdctl로 이미지 로드 (sudo 제거 - 이미 root로 실행 중)
+        LOAD_COMMAND="nerdctl --namespace=k8s.io load -i /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar && rm /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
         if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "${LOAD_COMMAND}"; then
             echo -e "${GREEN}✓ $node 노드 완료${NC}"
         else
