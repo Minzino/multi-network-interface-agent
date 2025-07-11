@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"multinic-agent/internal/domain/entities"
@@ -30,6 +31,14 @@ type NetplanYAML struct {
 		} `yaml:"ethernets"`
 		Version int `yaml:"version"`
 	} `yaml:"network"`
+}
+
+// NmConnectionConfig represents parsed nmconnection file data
+type NmConnectionConfig struct {
+	MacAddress string
+	MTU        int
+	Addresses  []string // IPv4 addresses in CIDR format
+	Method     string   // manual, disabled, etc.
 }
 
 // ConfigureNetworkUseCase는 네트워크 설정을 처리하는 유스케이스입니다
@@ -114,8 +123,13 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		var shouldProcess bool
 		
 		if osType == interfaces.OSTypeRHEL {
-			// RHEL: nmcli connection 존재 여부로 판단
-			shouldProcess = !uc.isNmcliConnectionExists(ctx, interfaceName.String()) || iface.Status == entities.StatusPending
+			// RHEL: nmcli connection 존재 여부와 드리프트 감지
+			connectionExists := uc.isNmcliConnectionExists(ctx, interfaceName.String())
+			isDrifted := false
+			if connectionExists {
+				isDrifted = uc.isNmcliConnectionDrifted(ctx, iface, interfaceName.String())
+			}
+			shouldProcess = !connectionExists || isDrifted || iface.Status == entities.StatusPending
 		} else {
 			// Ubuntu: Netplan 파일 기반 처리
 			configPath := uc.findNetplanFileForInterface(interfaceName.String())
@@ -298,6 +312,153 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 	return isDrifted
 }
 
+// isNmcliConnectionDrifted는 nmconnection 파일과 DB 데이터 간의 드리프트를 감지합니다
+func (uc *ConfigureNetworkUseCase) isNmcliConnectionDrifted(ctx context.Context, dbIface entities.NetworkInterface, connectionName string) bool {
+	configPath := uc.findNmConnectionFile(connectionName)
+	if configPath == "" {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_id":    dbIface.ID,
+			"connection_name": connectionName,
+		}).Debug("nmconnection file not found, detected as configuration change")
+		return true
+	}
+
+	nmConfig, err := uc.parseNmConnectionFile(configPath)
+	if err != nil {
+		uc.logger.WithError(err).WithField("file", configPath).Warn("Failed to parse nmconnection file, treating as configuration mismatch")
+		return true
+	}
+
+	// MAC 주소 검증
+	if !strings.EqualFold(nmConfig.MacAddress, dbIface.MacAddress) {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_id":   dbIface.ID,
+			"db_mac":         dbIface.MacAddress,
+			"file_mac":       nmConfig.MacAddress,
+			"connection_name": connectionName,
+		}).Warn("MAC address mismatch in nmconnection file, treating as configuration change")
+		return true
+	}
+
+	// IP 주소 및 설정 드리프트 감지
+	var fileAddress, fileCIDR string
+	hasAddresses := len(nmConfig.Addresses) > 0
+	
+	if hasAddresses {
+		// Parse the first address
+		ip, ipNet, err := net.ParseCIDR(nmConfig.Addresses[0])
+		if err == nil {
+			fileAddress = ip.String()
+			fileCIDR = ipNet.String()
+		}
+	}
+
+	// 드리프트 감지 조건
+	isDrifted := (!hasAddresses && dbIface.Address != "") ||
+		(dbIface.Address != fileAddress) ||
+		(dbIface.CIDR != fileCIDR) ||
+		(dbIface.MTU != nmConfig.MTU)
+
+	if isDrifted {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_id":    dbIface.ID,
+			"connection_name": connectionName,
+			"db_address":      dbIface.Address,
+			"file_address":    fileAddress,
+			"db_cidr":         dbIface.CIDR,
+			"file_cidr":       fileCIDR,
+			"db_mtu":          dbIface.MTU,
+			"file_mtu":        nmConfig.MTU,
+			"config_change_1": (!hasAddresses && dbIface.Address != ""),
+			"config_change_2": (dbIface.Address != fileAddress),
+			"config_change_3": (dbIface.CIDR != fileCIDR),
+			"config_change_4": (dbIface.MTU != nmConfig.MTU),
+		}).Debug("nmconnection configuration changes detected")
+	}
+
+	return isDrifted
+}
+
+// parseNmConnectionFile는 nmconnection 파일을 파싱합니다
+func (uc *ConfigureNetworkUseCase) parseNmConnectionFile(filePath string) (*NmConnectionConfig, error) {
+	content, err := uc.fileSystem.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	config := &NmConnectionConfig{
+		Method: "disabled", // 기본값
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(content)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		switch key {
+		case "mac-address":
+			config.MacAddress = value
+		case "mtu":
+			if mtu, err := strconv.Atoi(value); err == nil {
+				config.MTU = mtu
+			}
+		case "method":
+			config.Method = value
+		case "address1", "addresses":
+			// Handle multiple address formats
+			addresses := strings.Split(value, ";")
+			for _, addr := range addresses {
+				addr = strings.TrimSpace(addr)
+				if addr != "" {
+					config.Addresses = append(config.Addresses, addr)
+				}
+			}
+		}
+	}
+
+	return config, scanner.Err()
+}
+
+// findNmConnectionFile는 해당 connection의 nmconnection 파일을 찾습니다
+func (uc *ConfigureNetworkUseCase) findNmConnectionFile(connectionName string) string {
+	configDir := uc.configurer.GetConfigDir()
+	fileName := connectionName + ".nmconnection"
+	filePath := filepath.Join(configDir, fileName)
+	
+	if uc.fileSystem.Exists(filePath) {
+		return filePath
+	}
+	
+	return ""
+}
+
+// isNmcliConnectionExists는 nmcli connection이 존재하는지 확인합니다
+func (uc *ConfigureNetworkUseCase) isNmcliConnectionExists(ctx context.Context, connectionName string) bool {
+	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
+	if err != nil {
+		uc.logger.WithError(err).Debug("Failed to list nmcli connections")
+		return false
+	}
+	
+	for _, conn := range connections {
+		if conn == connectionName {
+			return true
+		}
+	}
+	
+	return false
+}
+
 // findNetplanFileForInterface는 해당 인터페이스의 실제 netplan 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
@@ -329,19 +490,3 @@ func extractInterfaceIndex(name string) int {
 	return 0
 }
 
-// isNmcliConnectionExists는 nmcli connection이 존재하는지 확인합니다
-func (uc *ConfigureNetworkUseCase) isNmcliConnectionExists(ctx context.Context, interfaceName string) bool {
-	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
-	if err != nil {
-		uc.logger.WithError(err).Debug("Failed to list nmcli connections")
-		return false
-	}
-	
-	for _, conn := range connections {
-		if conn == interfaceName {
-			return true
-		}
-	}
-	
-	return false
-}
