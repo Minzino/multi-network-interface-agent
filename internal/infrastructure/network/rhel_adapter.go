@@ -274,7 +274,9 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 		}
 		
 		// The output will be just the MAC address with -g (get-values) flag
+		// nmcli escapes colons in MAC addresses (e.g., FA\:16\:3E\:BB\:93\:7A)
 		hwaddr := strings.ToUpper(strings.TrimSpace(string(detailOutput)))
+		hwaddr = strings.ReplaceAll(hwaddr, "\\:", ":")
 		
 		if hwaddr == targetMAC {
 			a.logger.WithFields(logrus.Fields{
