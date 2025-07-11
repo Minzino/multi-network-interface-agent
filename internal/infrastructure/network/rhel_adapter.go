@@ -66,7 +66,19 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"mac":       macAddress,
 	}).Info("Starting RHEL interface configuration with nmcli")
 
-	// 1. Delete existing connection if any
+	// 1. Find the actual device name by MAC address
+	actualDevice, err := a.findDeviceByMAC(ctx, macAddress)
+	if err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to find device with MAC %s", macAddress), err)
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"connection_name": ifaceName,
+		"actual_device":   actualDevice,
+		"mac":            macAddress,
+	}).Debug("Found actual device for MAC address")
+
+	// 2. Delete existing connection if any
 	_ = a.Rollback(ctx, ifaceName)
 
 	// Helper function to execute nmcli commands
@@ -75,15 +87,16 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		return err
 	}
 
-	// 2. Add new connection
+	// 3. Add new connection
+	// Use the actual device name found by MAC address
 	addCmd := []string{
-		"connection", "add", "type", "ethernet", "con-name", ifaceName, "ifname", ifaceName, "mac", macAddress,
+		"connection", "add", "type", "ethernet", "con-name", ifaceName, "ifname", actualDevice,
 	}
 	if err := execNmcli(addCmd...); err != nil {
 		return errors.NewNetworkError(fmt.Sprintf("nmcli connection add failed: %s", ifaceName), err)
 	}
 
-	// 3. Configure IP settings
+	// 4. Configure IP settings
 	if iface.Address != "" && iface.CIDR != "" {
 		// Static IP configuration
 		// Extract prefix from CIDR (e.g., "10.0.0.0/24" -> "24")
@@ -220,4 +233,41 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 
 	a.logger.WithField("interface", name).Info("nmcli interface rollback/deletion completed")
 	return nil
+}
+
+// findDeviceByMAC finds the actual device name by MAC address
+func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (string, error) {
+	// Use nmcli to list all devices with their MAC addresses
+	// Format: nmcli -t -f DEVICE,HWADDR device
+	output, err := a.execNmcli(ctx, "-t", "-f", "DEVICE,HWADDR", "device")
+	if err != nil {
+		return "", fmt.Errorf("failed to list devices: %w", err)
+	}
+
+	// Parse output line by line
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Format is "device:mac_address"
+		parts := strings.Split(line, ":")
+		if len(parts) >= 2 {
+			device := parts[0]
+			hwaddr := strings.ToUpper(parts[1])
+			targetMAC := strings.ToUpper(macAddress)
+			
+			if hwaddr == targetMAC {
+				a.logger.WithFields(logrus.Fields{
+					"device": device,
+					"mac":    macAddress,
+				}).Debug("Found device for MAC address")
+				return device, nil
+			}
+		}
+	}
+	
+	return "", fmt.Errorf("no device found with MAC address %s", macAddress)
 }
