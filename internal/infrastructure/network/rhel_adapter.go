@@ -88,9 +88,10 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	}
 
 	// 3. Add new connection
-	// Use the actual device name found by MAC address
+	// Use the actual device name found by MAC address and set the MAC address explicitly
 	addCmd := []string{
 		"connection", "add", "type", "ethernet", "con-name", ifaceName, "ifname", actualDevice,
+		"802-3-ethernet.mac-address", macAddress,
 	}
 	if err := execNmcli(addCmd...); err != nil {
 		return errors.NewNetworkError(fmt.Sprintf("nmcli connection add failed: %s", ifaceName), err)

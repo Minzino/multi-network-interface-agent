@@ -197,22 +197,45 @@ func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) 
 
 // GetNmcliConnectionMAC는 nmcli connection에서 MAC 주소를 조회합니다
 func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, connName string) (string, error) {
-	// nmcli -t -f 802-3-ethernet.mac-address connection show {connName}
-	output, err := s.execNmcli(ctx, "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
+	// connection의 device 정보를 먼저 확인
+	deviceOutput, err := s.execNmcli(ctx, "-t", "-f", "GENERAL.DEVICES", "connection", "show", connName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get MAC address for connection %s: %w", connName, err)
+		return "", fmt.Errorf("failed to get device for connection %s: %w", connName, err)
 	}
 	
-	// Output format: "802-3-ethernet.mac-address:FA:16:3E:00:BE:63"
-	outputStr := strings.TrimSpace(string(output))
-	parts := strings.Split(outputStr, ":")
-	if len(parts) >= 7 {
-		// Extract MAC address part (last 6 parts)
-		macParts := parts[len(parts)-6:]
-		return strings.Join(macParts, ":"), nil
+	deviceName := strings.TrimSpace(string(deviceOutput))
+	// device가 "--"이면 연결되지 않은 상태이므로 설정된 MAC 주소 확인
+	if deviceName == "--" || deviceName == "" {
+		// 설정된 MAC 주소 확인
+		macOutput, err := s.execNmcli(ctx, "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
+		if err != nil {
+			return "", fmt.Errorf("failed to get configured MAC address for connection %s: %w", connName, err)
+		}
+		
+		macStr := strings.TrimSpace(string(macOutput))
+		// "802-3-ethernet.mac-address:FA:16:3E:00:BE:63" 형식에서 MAC 추출
+		if strings.HasPrefix(macStr, "802-3-ethernet.mac-address:") {
+			mac := strings.TrimPrefix(macStr, "802-3-ethernet.mac-address:")
+			if mac != "" {
+				return mac, nil
+			}
+		}
+		return "", fmt.Errorf("connection %s has empty MAC address", connName)
 	}
 	
-	return "", fmt.Errorf("unexpected output format from nmcli: %s", outputStr)
+	// device가 연결되어 있으면 실제 device의 MAC 주소 확인
+	macOutput, err := s.execNmcli(ctx, "-g", "GENERAL.HWADDR", "device", "show", deviceName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get MAC address for device %s: %w", deviceName, err)
+	}
+	
+	macAddr := strings.TrimSpace(string(macOutput))
+	macAddr = strings.ReplaceAll(macAddr, "\\:", ":")
+	if macAddr == "" {
+		return "", fmt.Errorf("device %s has empty MAC address", deviceName)
+	}
+	
+	return macAddr, nil
 }
 
 // GetHostname은 시스템의 호스트네임을 반환합니다
