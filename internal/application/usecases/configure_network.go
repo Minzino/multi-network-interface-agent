@@ -39,6 +39,7 @@ type ConfigureNetworkUseCase struct {
 	rollbacker    interfaces.NetworkRollbacker
 	namingService *services.InterfaceNamingService
 	fileSystem    interfaces.FileSystem // 파일 시스템 의존성 추가
+	osDetector    interfaces.OSDetector
 	logger        *logrus.Logger
 }
 
@@ -49,6 +50,7 @@ func NewConfigureNetworkUseCase(
 	rollbacker interfaces.NetworkRollbacker,
 	naming *services.InterfaceNamingService,
 	fs interfaces.FileSystem, // 파일 시스템 의존성 추가
+	osDetector interfaces.OSDetector,
 	logger *logrus.Logger,
 ) *ConfigureNetworkUseCase {
 	return &ConfigureNetworkUseCase{
@@ -57,6 +59,7 @@ func NewConfigureNetworkUseCase(
 		rollbacker:    rollbacker,
 		namingService: naming,
 		fileSystem:    fs,
+		osDetector:    osDetector,
 		logger:        logger,
 	}
 }
@@ -75,11 +78,23 @@ type ConfigureNetworkOutput struct {
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
 func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureNetworkInput) (*ConfigureNetworkOutput, error) {
+	// OS 타입 감지
+	osType, err := uc.osDetector.DetectOS(ctx)
+	if err != nil {
+		return nil, errors.NewSystemError("failed to detect OS type", err)
+	}
+
 	// 1. 해당 노드의 모든 활성 인터페이스 조회 (netplan_success 상태 무관)
 	allInterfaces, err := uc.repository.GetAllNodeInterfaces(ctx, input.NodeName)
 	if err != nil {
 		return nil, errors.NewSystemError("failed to get node interfaces", err)
 	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"node_name": input.NodeName,
+		"interface_count": len(allInterfaces),
+		"os_type": osType,
+	}).Debug("Retrieved interfaces from database")
 
 	// 실제로 처리할 인터페이스가 있을 때만 로그 출력하도록 나중에 확인
 
@@ -95,23 +110,39 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 			continue
 		}
 
-		// 실제 존재하는 Netplan 설정 파일 찾기
-		configPath := uc.findNetplanFileForInterface(interfaceName.String())
-		if configPath == "" {
-			// 파일이 없으면 새로 생성할 경로 설정
-			configPath = filepath.Join(uc.configurer.GetConfigDir(), fmt.Sprintf("9%d-%s.yaml", extractInterfaceIndex(interfaceName.String()), interfaceName.String()))
-		}
+		// OS 타입에 따라 다른 처리
+		var shouldProcess bool
+		
+		if osType == interfaces.OSTypeRHEL {
+			// RHEL: nmcli connection 존재 여부로 판단
+			shouldProcess = !uc.isNmcliConnectionExists(ctx, interfaceName.String()) || iface.Status == entities.StatusPending
+		} else {
+			// Ubuntu: Netplan 파일 기반 처리
+			configPath := uc.findNetplanFileForInterface(interfaceName.String())
+			if configPath == "" {
+				// 파일이 없으면 새로 생성할 경로 설정
+				configPath = filepath.Join(uc.configurer.GetConfigDir(), fmt.Sprintf("9%d-%s.yaml", extractInterfaceIndex(interfaceName.String()), interfaceName.String()))
+			}
 
-		// 디버그 로그는 드리프트가 감지되거나 처리가 필요한 경우에만 출력
-
-		// 파일이 존재하지 않거나, 드리프트가 발생했거나, 아직 설정되지 않은 경우 처리
-		fileExists := uc.fileSystem.Exists(configPath)
-		isDrifted := false
-		if fileExists {
-			isDrifted = uc.isDrifted(ctx, iface, configPath)
+			// 파일이 존재하지 않거나, 드리프트가 발생했거나, 아직 설정되지 않은 경우 처리
+			fileExists := uc.fileSystem.Exists(configPath)
+			isDrifted := false
+			if fileExists {
+				isDrifted = uc.isDrifted(ctx, iface, configPath)
+			}
+			shouldProcess = !fileExists || isDrifted || iface.Status == entities.StatusPending
 		}
 		
-		if !fileExists || isDrifted || iface.Status == entities.StatusPending {
+		if shouldProcess {
+			uc.logger.WithFields(logrus.Fields{
+				"interface_id":   iface.ID,
+				"interface_name": interfaceName.String(),
+				"mac_address":    iface.MacAddress,
+				"should_process": shouldProcess,
+				"status":         iface.Status,
+				"os_type":        osType,
+			}).Debug("Processing interface")
+			
 			if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
 				uc.logger.WithFields(logrus.Fields{
 					"interface_id":   iface.ID,
@@ -296,4 +327,21 @@ func extractInterfaceIndex(name string) int {
 		}
 	}
 	return 0
+}
+
+// isNmcliConnectionExists는 nmcli connection이 존재하는지 확인합니다
+func (uc *ConfigureNetworkUseCase) isNmcliConnectionExists(ctx context.Context, interfaceName string) bool {
+	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
+	if err != nil {
+		uc.logger.WithError(err).Debug("Failed to list nmcli connections")
+		return false
+	}
+	
+	for _, conn := range connections {
+		if conn == interfaceName {
+			return true
+		}
+	}
+	
+	return false
 }
