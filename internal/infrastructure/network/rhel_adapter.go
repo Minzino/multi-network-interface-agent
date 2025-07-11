@@ -39,9 +39,9 @@ func NewRHELAdapter(
 }
 
 // GetConfigDir returns the directory path where configuration files are stored
-// RHEL uses nmcli so returns empty string instead of actual file path
+// RHEL/NetworkManager stores connection profiles in /etc/NetworkManager/system-connections/
 func (a *RHELAdapter) GetConfigDir() string {
-	return ""
+	return "/etc/NetworkManager/system-connections"
 }
 
 // execNmcli is a helper method to execute nmcli commands with nsenter if in container
@@ -134,7 +134,14 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		}).Debug("MTU configured")
 	}
 
-	// 5. Activate connection
+	// 5. Test configuration before activation (optional reload)
+	// This ensures the configuration is valid
+	reloadCmd := []string{"connection", "reload"}
+	if err := execNmcli(reloadCmd...); err != nil {
+		a.logger.WithError(err).Warn("nmcli connection reload failed, continuing anyway")
+	}
+
+	// 6. Activate connection
 	upCmd := []string{"connection", "up", ifaceName}
 	if err := execNmcli(upCmd...); err != nil {
 		// Rollback on activation failure
@@ -142,6 +149,19 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 			a.logger.WithError(rollbackErr).Warn("Error during rollback after nmcli connection up failure")
 		}
 		return errors.NewNetworkError(fmt.Sprintf("nmcli connection up failed: %s", ifaceName), err)
+	}
+
+	// 7. Verify the connection is actually working
+	// Give it a moment to establish
+	time.Sleep(2 * time.Second)
+	
+	if err := a.Validate(ctx, name); err != nil {
+		a.logger.WithError(err).Error("Interface validation failed after activation")
+		// Rollback if validation fails
+		if rollbackErr := a.Rollback(ctx, ifaceName); rollbackErr != nil {
+			a.logger.WithError(rollbackErr).Warn("Error during rollback after validation failure")
+		}
+		return errors.NewNetworkError(fmt.Sprintf("Interface validation failed after activation: %s", ifaceName), err)
 	}
 
 	a.logger.WithField("interface", ifaceName).Info("nmcli interface configuration completed")

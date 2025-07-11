@@ -62,6 +62,9 @@ func TestRHELAdapter_Configure(t *testing.T) {
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				// 1. Delete existing (rollback)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), errors.New("not found")).Once()
@@ -83,10 +86,22 @@ func TestRHELAdapter_Configure(t *testing.T) {
 					"connection", "modify", "multinic0", "ipv6.method", "disabled").
 					Return([]byte(""), nil).Once()
 				
-				// 5. Activate connection
+				// 5. Reload connections
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
+					"connection", "reload").
+					Return([]byte(""), nil).Once()
+				
+				// 6. Activate connection
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
 					"connection", "up", "multinic0").
 					Return([]byte("Connection successfully activated"), nil).Once()
+				
+				// 7. Validate connection
+				validationOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+multinic0  ethernet  connected  multinic0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(validationOutput), nil).Once()
 			},
 			wantErr: false,
 		},
@@ -100,6 +115,9 @@ func TestRHELAdapter_Configure(t *testing.T) {
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				// 1. Delete existing (rollback)
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
@@ -126,10 +144,22 @@ func TestRHELAdapter_Configure(t *testing.T) {
 					"connection", "modify", "multinic0", "ethernet.mtu", "1500").
 					Return([]byte(""), nil).Once()
 				
-				// 6. Activate connection
+				// 6. Reload connections
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
+					"connection", "reload").
+					Return([]byte(""), nil).Once()
+				
+				// 7. Activate connection
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
 					"connection", "up", "multinic0").
 					Return([]byte("Connection successfully activated"), nil).Once()
+				
+				// 8. Validate connection
+				validationOutput := `DEVICE     TYPE      STATE      CONNECTION
+eth0       ethernet  connected  eth0
+multinic0  ethernet  connected  multinic0`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
+					Return([]byte(validationOutput), nil).Once()
 			},
 			wantErr: false,
 		},
@@ -140,6 +170,9 @@ func TestRHELAdapter_Configure(t *testing.T) {
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				// Rollback
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
@@ -161,6 +194,9 @@ func TestRHELAdapter_Configure(t *testing.T) {
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				// Initial rollback
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), nil).Once()
@@ -180,6 +216,11 @@ func TestRHELAdapter_Configure(t *testing.T) {
 				// Disable IPv6
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
 					"connection", "modify", "multinic0", "ipv6.method", "disabled").
+					Return([]byte(""), nil).Once()
+				
+				// Reload connections
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", 
+					"connection", "reload").
 					Return([]byte(""), nil).Once()
 				
 				// Activate fails
@@ -231,6 +272,9 @@ func TestRHELAdapter_Validate(t *testing.T) {
 		{
 			name: "인터페이스가 connected 상태",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				output := `DEVICE     TYPE      STATE      CONNECTION
 eth0       ethernet  connected  eth0
 multinic0  ethernet  connected  multinic0
@@ -243,6 +287,9 @@ lo         loopback  unmanaged  --`
 		{
 			name: "인터페이스가 disconnected 상태",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				output := `DEVICE     TYPE      STATE         CONNECTION
 eth0       ethernet  connected     eth0
 multinic0  ethernet  disconnected  --
@@ -255,6 +302,9 @@ lo         loopback  unmanaged     --`
 		{
 			name: "인터페이스가 목록에 없음",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				output := `DEVICE  TYPE      STATE      CONNECTION
 eth0    ethernet  connected  eth0
 lo      loopback  unmanaged  --`
@@ -266,6 +316,9 @@ lo      loopback  unmanaged  --`
 		{
 			name: "nmcli 명령 실행 실패",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
 					Return([]byte(""), errors.New("command failed")).Once()
 			},
@@ -303,6 +356,9 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 		{
 			name: "성공적인 롤백",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte("Connection successfully deactivated"), nil).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
@@ -313,6 +369,9 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 		{
 			name: "connection이 이미 없는 경우도 성공",
 			setupMocks: func(m *MockCommandExecutor) {
+				// Container check for adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
 					Return([]byte(""), errors.New("no such connection")).Once()
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
@@ -342,6 +401,11 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 }
 
 func TestRHELAdapter_GetConfigDir(t *testing.T) {
-	adapter := NewRHELAdapter(nil, logrus.New())
-	assert.Equal(t, "", adapter.GetConfigDir())
+	mockExecutor := new(MockCommandExecutor)
+	// isContainer check
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+		Return([]byte(""), errors.New("not found")).Once()
+	
+	adapter := NewRHELAdapter(mockExecutor, logrus.New())
+	assert.Equal(t, "/etc/NetworkManager/system-connections", adapter.GetConfigDir())
 }
