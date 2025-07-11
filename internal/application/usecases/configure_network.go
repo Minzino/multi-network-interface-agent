@@ -79,7 +79,7 @@ type ConfigureNetworkOutput struct {
 // Execute는 네트워크 설정 유스케이스를 실행합니다
 func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureNetworkInput) (*ConfigureNetworkOutput, error) {
 	// OS 타입 감지
-	osType, err := uc.osDetector.DetectOS(ctx)
+	osType, err := uc.osDetector.DetectOS()
 	if err != nil {
 		return nil, errors.NewSystemError("failed to detect OS type", err)
 	}

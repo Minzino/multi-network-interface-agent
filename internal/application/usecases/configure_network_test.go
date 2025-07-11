@@ -136,8 +136,8 @@ type MockOSDetector struct {
 	mock.Mock
 }
 
-func (m *MockOSDetector) DetectOS(ctx context.Context) (interfaces.OSType, error) {
-	args := m.Called(ctx)
+func (m *MockOSDetector) DetectOS() (interfaces.OSType, error) {
+	args := m.Called()
 	return args.Get(0).(interfaces.OSType), args.Error(1)
 }
 
@@ -155,7 +155,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				repo.On("GetAllNodeInterfaces", mock.Anything, "test-node").Return([]entities.NetworkInterface{}, nil)
 			},
 			expectedOutput: &ConfigureNetworkOutput{
@@ -171,7 +171,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				testInterface := entities.NetworkInterface{
 					ID:               1,
 					MacAddress:       "00:11:22:33:44:55",
@@ -221,7 +221,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				testInterface := entities.NetworkInterface{
 					ID:               1,
 					MacAddress:       "00:11:22:33:44:55",
@@ -269,7 +269,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				testInterface := entities.NetworkInterface{
 					ID:               1,
 					MacAddress:       "00:11:22:33:44:55",
@@ -322,7 +322,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				repo.On("GetAllNodeInterfaces", mock.Anything, "test-node").Return([]entities.NetworkInterface{}, errors.New("DB 연결 실패"))
 			},
 			expectedOutput: nil,
@@ -334,7 +334,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				NodeName: "test-node",
 			},
 			setupMocks: func(repo *MockNetworkInterfaceRepository, configurer *MockNetworkConfigurer, rollbacker *MockNetworkRollbacker, fs *MockFileSystem, osDetector *MockOSDetector) {
-				osDetector.On("DetectOS", mock.Anything).Return(interfaces.OSTypeUbuntu, nil)
+				osDetector.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
 				// DB에 설정된 인터페이스
 				dbIface := entities.NetworkInterface{
 					ID:               1,
