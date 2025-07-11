@@ -46,13 +46,62 @@ func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, err
 	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
 
+// GenerateNextNameForOS는 OS에 따라 사용 가능한 다음 이름을 생성합니다
+func (s *InterfaceNamingService) GenerateNextNameForOS(nmcliConnections []string) (entities.InterfaceName, error) {
+	// nmcli connection 이름을 맵으로 변환하여 빠른 조회
+	connMap := make(map[string]bool)
+	for _, conn := range nmcliConnections {
+		connMap[conn] = true
+	}
+	
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("multinic%d", i)
+		
+		// nmcli connection에 있는지 확인
+		if connMap[name] {
+			continue
+		}
+		
+		// 실제 인터페이스로도 존재하는지 확인 (Ubuntu의 경우)
+		if s.isInterfaceInUse(name) {
+			continue
+		}
+		
+		// 사용 가능한 이름 발견
+		return entities.NewInterfaceName(name)
+	}
+	
+	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
+}
+
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
 func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (entities.InterfaceName, error) {
-	// 먼저 해당 MAC 주소로 이미 설정된 인터페이스가 있는지 확인
+	// OS 타입을 확인하여 RHEL인 경우 nmcli connection을 확인
+	ctx := context.Background()
+	nmcliConnections, _ := s.ListNmcliConnectionNames(ctx)
+	
+	// 먼저 해당 MAC 주소로 이미 설정된 connection이 있는지 확인
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
-		if s.isInterfaceInUse(name) {
+		
+		// RHEL의 경우 nmcli connection 목록에서 확인
+		isUsedInNmcli := false
+		for _, conn := range nmcliConnections {
+			if conn == name {
+				isUsedInNmcli = true
+				// 해당 connection의 MAC 주소 확인
+				existingMAC, err := s.GetNmcliConnectionMAC(ctx, name)
+				if err == nil && strings.EqualFold(existingMAC, macAddress) {
+					// 동일한 MAC 주소를 가진 connection 발견
+					return entities.NewInterfaceName(name)
+				}
+				break
+			}
+		}
+		
+		// Ubuntu의 경우 기존 방식대로 확인
+		if !isUsedInNmcli && s.isInterfaceInUse(name) {
 			// 해당 인터페이스의 MAC 주소 확인
 			existingMAC, err := s.GetMacAddressForInterface(name)
 			if err == nil && strings.EqualFold(existingMAC, macAddress) {
@@ -63,7 +112,7 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 	}
 	
 	// 기존에 할당된 이름이 없으면 새로운 이름 생성
-	return s.GenerateNextName()
+	return s.GenerateNextNameForOS(nmcliConnections)
 }
 
 // isInterfaceInUse는 인터페이스가 이미 사용 중인지 확인합니다
