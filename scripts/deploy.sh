@@ -198,15 +198,11 @@ for node in "${ALL_NODES[@]}"; do
     if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${IMAGE_NAME}-${IMAGE_TAG}.tar $node:/tmp/ 2>/dev/null; then
         echo -e "${YELLOW}🔧 $node 노드에 이미지 로드 중...${NC}"
         
-        # 원격 노드에서 사용할 컨테이너 런타임 감지
-        REMOTE_CLI="sudo nerdctl --namespace=k8s.io" # 기본값
-        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node 'command -v podman &> /dev/null'; then
-            REMOTE_CLI="sudo podman"
-            echo -e "${BLUE}INFO: $node 노드에서 Podman 감지됨${NC}"
-        fi
-
-        # 감지된 런타임으로 이미지 로드
-        LOAD_COMMAND="${REMOTE_CLI} load -i /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar && rm /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
+        # nerdctl만 사용하도록 고정
+        echo -e "${BLUE}INFO: nerdctl을 사용하여 이미지 로드${NC}"
+        
+        # nerdctl로 이미지 로드
+        LOAD_COMMAND="sudo nerdctl --namespace=k8s.io load -i /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar && rm /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
         if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "${LOAD_COMMAND}"; then
             echo -e "${GREEN}✓ $node 노드 완료${NC}"
         else
@@ -240,7 +236,7 @@ if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
     --set image.repository=$IMAGE_NAME \
     --set image.tag=$IMAGE_TAG \
-    --set image.pullPolicy=Never \
+    --set image.pullPolicy=IfNotPresent \
     --wait --timeout=5m; then
 
     echo -e "${GREEN}✓ MultiNIC Agent 배포 완료${NC}"

@@ -1058,6 +1058,153 @@ Debug 레벨에서도 30초마다 반복되는 로그:
 - **실제 작업 시**: 해당 작업 로그만 출력
 - **시작 시**: 필수 정보(헬스체크, 에이전트 시작)만 출력
 
+## 프로젝트 이름 변경 (multinic-agent-v2 → multinic-agent) (2025-07-11)
+
+### 변경 사항
+1. **모듈명 변경**: go.mod의 module 이름을 `multinic-agent-v2`에서 `multinic-agent`로 변경
+2. **Import 경로 수정**: 모든 Go 소스 파일의 import 경로 업데이트
+3. **문서 업데이트**: README.md와 CLAUDE.md에서 v2 제거
+4. **GitHub 저장소**: `multinic-agent-v2` → `multinic-agent`로 이름 변경
+5. **로컬 폴더명 변경**: 수동으로 폴더명 변경 필요
+
+### 변경 방법
+```bash
+# 1. 모든 파일에서 multinic-agent-v2를 multinic-agent로 변경
+sed -i '' 's/multinic-agent-v2/multinic-agent/g' go.mod
+find . -name "*.go" -type f -exec sed -i '' 's/multinic-agent-v2/multinic-agent/g' {} \;
+
+# 2. 문서 파일 업데이트
+sed -i '' 's/multinic-agent-v2/multinic-agent/g' README.md CLAUDE.md
+sed -i '' 's/MultiNIC Agent v2/MultiNIC Agent/g' README.md CLAUDE.md
+
+# 3. Git remote URL 업데이트
+git remote set-url origin https://github.com/Minzino/multinic-agent.git
+
+# 4. 로컬 폴더명 변경 (프로젝트 외부에서 실행)
+cd ..
+mv multinic-agent-v2 multinic-agent
+```
+
+### 영향
+- ✅ 프로젝트 빌드 정상 작동
+- ✅ 모든 테스트 통과
+- ✅ import 경로 일관성 확보
+- ✅ 더 간결한 프로젝트 이름
+
+## RHEL/CentOS 지원 추가 (2025-07-11)
+
+### 배경
+기존에 Ubuntu(Netplan)과 SUSE(Wicked)를 지원했으나, SUSE 지원을 제거하고 대신 RHEL/CentOS 계열 OS를 위한 nmcli 기반 지원을 추가했습니다.
+
+### 주요 변경사항
+
+#### 1. SUSE 관련 코드 완전 제거
+- `OSTypeSUSE` 상수 제거
+- Wicked 관련 모든 로직과 문서 제거
+- OS 감지 로직에서 SUSE 제거
+
+#### 2. RHEL 어댑터 기능 강화
+**기존 문제점**: RHEL 어댑터가 IP 주소 설정을 지원하지 않음 (ipv4.method=disabled만 설정)
+
+**개선사항**:
+```go
+// IP 주소 설정 지원
+if iface.Address != "" && iface.CIDR != "" {
+    // CIDR에서 prefix 추출 (예: "192.168.1.0/24" → "24")
+    parts := strings.Split(iface.CIDR, "/")
+    if len(parts) == 2 {
+        prefix := parts[1]
+        fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
+        
+        // nmcli로 정적 IP 설정
+        setIPCmd := []string{"connection", "modify", ifaceName, 
+            "ipv4.method", "manual", 
+            "ipv4.addresses", fullAddress}
+    }
+}
+
+// MTU 설정 지원
+if iface.MTU > 0 {
+    setMTUCmd := []string{"connection", "modify", ifaceName, 
+        "ethernet.mtu", fmt.Sprintf("%d", iface.MTU)}
+}
+```
+
+#### 3. RHEL 고아 인터페이스 정리 기능
+**구현 방식**: MAC 주소 기반 고아 감지
+
+```go
+// 1. DB에서 활성 MAC 주소 목록 가져오기
+activeInterfaces, _ := uc.repository.GetActiveInterfaces(ctx, nodeName)
+activeMACAddresses := make(map[string]bool)
+for _, iface := range activeInterfaces {
+    activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+}
+
+// 2. nmcli connection에서 MAC 주소 추출
+output, _ := uc.namingService.GetNmcliConnectionMAC(ctx, connName)
+// 출력 형식: "802-3-ethernet.mac-address:FA:16:3E:00:BE:63"
+
+// 3. DB에 없는 MAC이면 고아로 판단
+if !activeMACAddresses[strings.ToLower(macAddress)] {
+    // 고아 connection 삭제
+    uc.rollbacker.Rollback(ctx, connName)
+}
+```
+
+#### 4. OS 감지 개선
+RHEL 계열 OS 감지 확대:
+- RHEL, CentOS, Rocky Linux, AlmaLinux, Oracle Linux
+- ID 필드와 ID_LIKE 필드 모두 확인
+
+```go
+if id == "rhel" || id == "centos" || id == "rocky" || 
+   id == "almalinux" || id == "oracle" || 
+   strings.Contains(idLike, "rhel") || 
+   strings.Contains(idLike, "fedora") {
+    return interfaces.OSTypeRHEL, nil
+}
+```
+
+### 테스트 커버리지
+
+#### RHELAdapter 테스트
+1. **Configure 테스트**
+   - IP 없는 인터페이스 설정
+   - 정적 IP 주소 설정
+   - connection add 실패 처리
+   - activation 실패 시 롤백
+
+2. **Validate 테스트**
+   - connected 상태 확인
+   - disconnected 상태 감지
+   - 인터페이스 없음 감지
+
+3. **Rollback 테스트**
+   - 정상 롤백
+   - 이미 삭제된 경우 처리
+
+#### 통합 테스트
+- GetNmcliConnectionMAC 메서드 추가
+- DeleteNetworkUseCase의 RHEL 지원 테스트
+- Mock을 통한 nmcli 명령어 시뮬레이션
+
+### 문서 업데이트
+1. **README.md**
+   - Ubuntu(Netplan) 및 RHEL/CentOS(nmcli) 지원 명시
+   - 요구사항: Ubuntu 18.04+ 또는 RHEL/CentOS 7+
+
+2. **CLAUDE.md**
+   - SUSE/Wicked 제거, RHEL/nmcli로 대체
+   - 기술적 차이점 설명 업데이트
+
+### 결과
+- ✅ RHEL/CentOS에서 완전한 네트워크 인터페이스 관리 지원
+- ✅ IP 주소, CIDR, MTU 설정 가능
+- ✅ MAC 주소 기반 고아 인터페이스 정리
+- ✅ 모든 테스트 통과
+- ✅ 프로덕션 배포 준비 완료
+
 ## 고아 인터페이스 감지 로직 개선 (2025-07-10)
 
 ### 문제 상황
