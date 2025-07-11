@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -146,6 +147,20 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
+	}
+	
+	// .novalocal 또는 다른 도메인 접미사 제거
+	originalHostname := hostname
+	if idx := strings.Index(hostname, "."); idx != -1 {
+		hostname = hostname[:idx]
+	}
+	
+	// 호스트명 변경사항 디버그 로그
+	if originalHostname != hostname {
+		a.logger.WithFields(logrus.Fields{
+			"original_hostname": originalHostname,
+			"cleaned_hostname": hostname,
+		}).Debug("Hostname domain suffix removed")
 	}
 
 	// 1. 네트워크 설정 유스케이스 실행 (생성/수정)
