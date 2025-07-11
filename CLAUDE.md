@@ -15,16 +15,16 @@ MultiNIC Agent는 Kubernetes 클러스터에 조인된 노드들의 네트워크
 
 ```
 ┌─────────────────┐
-│   Controller    │
-│  (DB: MariaDB)  │ → 네트워크 설정 정보 저장
+|   Controller    |
+|  (DB: MariaDB)  | -> 네트워크 설정 정보 저장
 └────────┬────────┘
-         │
+         |
     ┌────▼────┐
-    │ Agent   │ (DaemonSet)
-    │ - DB 모니터링 (30초 주기)
-    │ - 설정 적용
-    │ - 롤백 관리
-    │ - 헬스체크
+    | Agent   | (DaemonSet)
+    | - DB 모니터링 (30초 주기)
+    | - 설정 적용
+    | - 롤백 관리
+    | - 헬스체크
     └─────────┘
 ```
 
@@ -53,29 +53,29 @@ MultiNIC Agent는 Kubernetes 클러스터에 조인된 노드들의 네트워크
 ```
 multinic-agent/
 ├── cmd/agent/          # 메인 애플리케이션
-│   └── main.go         # 진입점
+|   └── main.go         # 진입점
 ├── internal/           # 클린 아키텍처 구조 (NEW)
-│   ├── domain/         # 비즈니스 로직 계층
-│   │   ├── entities/   # 도메인 엔티티
-│   │   ├── errors/     # 도메인 에러 정의
-│   │   ├── interfaces/ # 도메인 인터페이스
-│   │   └── services/   # 도메인 서비스
-│   ├── application/    # 애플리케이션 계층
-│   │   └── usecases/   # 유스케이스
-│   ├── infrastructure/ # 인프라스트럭처 계층
-│   │   ├── persistence/# 데이터베이스 구현
-│   │   ├── network/    # 네트워크 관리 구현
-│   │   ├── health/     # 헬스체크 구현
-│   │   └── config/     # 설정 관리
-│   └── interfaces/     # 인터페이스 어댑터
-│       ├── http/       # HTTP 핸들러
-│       └── cli/        # CLI 인터페이스
+|   ├── domain/         # 비즈니스 로직 계층
+|   |   ├── entities/   # 도메인 엔티티
+|   |   ├── errors/     # 도메인 에러 정의
+|   |   ├── interfaces/ # 도메인 인터페이스
+|   |   └── services/   # 도메인 서비스
+|   ├── application/    # 애플리케이션 계층
+|   |   └── usecases/   # 유스케이스
+|   ├── infrastructure/ # 인프라스트럭처 계층
+|   |   ├── persistence/# 데이터베이스 구현
+|   |   ├── network/    # 네트워크 관리 구현
+|   |   ├── health/     # 헬스체크 구현
+|   |   └── config/     # 설정 관리
+|   └── interfaces/     # 인터페이스 어댑터
+|       ├── http/       # HTTP 핸들러
+|       └── cli/        # CLI 인터페이스
 ├── pkg/                # 기존 패키지 (마이그레이션 예정)
-│   ├── db/             # 데이터베이스 연동
-│   ├── health/         # 헬스체크 시스템
-│   ├── netplan/        # Netplan 설정 관리
-│   ├── network/        # 네트워크 관리 추상화
-│   └── utils/          # 유틸리티 함수
+|   ├── db/             # 데이터베이스 연동
+|   ├── health/         # 헬스체크 시스템
+|   ├── netplan/        # Netplan 설정 관리
+|   ├── network/        # 네트워크 관리 추상화
+|   └── utils/          # 유틸리티 함수
 ├── deployments/helm/   # Helm 차트
 ├── scripts/            # 배포 및 테스트 스크립트
 └── test/               # 통합 테스트
@@ -237,7 +237,7 @@ type NetworkManager interface {
 ### 현재 제한사항
 - 최대 10개 인터페이스 지원 (multinic0~9)
 - 30초 고정 폴링 주기
-- 단방향 동기화 (DB → 노드)
+- 단방향 동기화 (DB -> 노드)
 
 ### 향후 개선 가능 영역
 1. 동적 폴링 주기 조정
@@ -248,51 +248,51 @@ type NetworkManager interface {
 ## 리팩터링 진행 상황
 
 ### Phase 1: 기반 구조 개선 (완료)
-1. ✅ **클린 아키텍처 디렉토리 구조 생성**
+1. **클린 아키텍처 디렉토리 구조 생성**
    - 도메인, 애플리케이션, 인프라스트럭처 레이어 분리
    
-2. ✅ **도메인 레이어 구현**
+2. **도메인 레이어 구현**
    - NetworkInterface 엔티티 정의
    - Repository, Network, OS 관련 인터페이스 정의
    - InterfaceNamingService 도메인 서비스 구현
    
-3. ✅ **에러 처리 체계 구축**
+3. **에러 처리 체계 구축**
    - 타입별 도메인 에러 정의 (Validation, NotFound, System 등)
    - 일관된 에러 생성 및 처리 패턴
    
-4. ✅ **Repository 패턴 구현**
+4. **Repository 패턴 구현**
    - MySQLRepository 구현
    - 도메인과 인프라 계층 분리
 
-5. ✅ **OS 감지 로직 개선**
+5. **OS 감지 로직 개선**
    - /etc/issue 파일 기반으로 단순화
 
 ### Phase 2: 핵심 로직 리팩터링 (완료)
-1. ✅ **인프라스트럭처 어댑터 구현**
+1. **인프라스트럭처 어댑터 구현**
    - OS 감지기 (RealOSDetector)
    - 파일 시스템 어댑터 (RealFileSystem, RealClock)
    - 설정 로더 (EnvironmentConfigLoader)
    
-2. ✅ **네트워크 관리 시스템 구현**
+2. **네트워크 관리 시스템 구현**
    - NetplanManager와 RHELManager 어댑터
    - 통합된 백업 서비스 (BackupService)
    - 헬스 체크 서비스 (HealthService)
    
-3. ✅ **애플리케이션 유스케이스 구현**
+3. **애플리케이션 유스케이스 구현**
    - ConfigureNetworkUseCase
    - 모든 비즈니스 로직 캡슐화
    
-4. ✅ **의존성 주입 컨테이너**
+4. **의존성 주입 컨테이너**
    - 전체 시스템 조립 및 관리
    - 생명주기 관리 (graceful shutdown)
    
-5. ✅ **main.go 완전 리팩터링**
-   - 250줄 → 179줄로 코드 축소
+5. **main.go 완전 리팩터링**
+   - 250줄 -> 179줄로 코드 축소
    - Application 구조체로 관심사 분리
    - 의존성 주입을 통한 테스트 가능성 향상
 
 ### Phase 3: 테스트 및 검증 (완료)
-1. ✅ **단위 테스트 작성**
+1. **단위 테스트 작성**
    - 도메인 엔티티 테스트 (100% 커버리지)
      * NetworkInterface 유효성 검증 테스트
      * MAC 주소/인터페이스 이름 형식 검증
@@ -311,12 +311,12 @@ type NetworkManager interface {
      * OS 감지 어댑터 (다양한 OS 형식 테스트)
      * 설정 로더 (환경 변수 처리 테스트)
 
-2. ✅ **통합 테스트 구현**
+2. **통합 테스트 구현**
    - 클린 아키텍처 구성 요소 간 통합 테스트
    - 실제 의존성과 Mock 의존성 혼합 테스트
    - 컨테이너 초기화 및 라이프사이클 테스트
 
-3. ✅ **테스트 인프라스트럭처**
+3. **테스트 인프라스트럭처**
    - testify/mock 라이브러리 도입
    - 모든 도메인 인터페이스에 대한 Mock 구현
    - 일관된 테스트 패턴 및 구조
@@ -339,9 +339,9 @@ type NetworkManager interface {
 ### 리팩터링 성과 및 개선 사항
 
 #### 정량적 개선 지표
-1. **코드 복잡도 감소**: main.go 코드 250줄 → 179줄 (28% 감소)
+1. **코드 복잡도 감소**: main.go 코드 250줄 -> 179줄 (28% 감소)
 2. **테스트 커버리지**: 핵심 도메인 로직 90%+ 커버리지 달성
-3. **아키텍처 레이어 분리**: 단일 파일 → 4개 계층으로 구조화
+3. **아키텍처 레이어 분리**: 단일 파일 -> 4개 계층으로 구조화
 4. **의존성 관리**: 순환 참조 제거, 인터페이스 기반 느슨한 결합
 
 #### 품질 개선 사항
@@ -487,11 +487,11 @@ Error 1054 (42S22): Unknown column 'ip_address' in 'field list'
 클린 아키텍처 마이그레이션 완료로 인한 사용하지 않는 코드 제거:
 
 1. **pkg/ 디렉토리 전체 제거**
-   - pkg/db/ - 기존 데이터베이스 연결 로직 (→ internal/infrastructure/persistence/)
-   - pkg/health/ - 레거시 헬스체크 (→ internal/infrastructure/health/)
-   - pkg/netplan/ - 레거시 netplan 관리 (→ internal/infrastructure/network/)
-   - pkg/network/ - 레거시 네트워크 관리 (→ internal/infrastructure/network/)
-   - pkg/utils/ - 유틸리티 함수들 (→ internal/domain/services/)
+   - pkg/db/ - 기존 데이터베이스 연결 로직 (-> internal/infrastructure/persistence/)
+   - pkg/health/ - 레거시 헬스체크 (-> internal/infrastructure/health/)
+   - pkg/netplan/ - 레거시 netplan 관리 (-> internal/infrastructure/network/)
+   - pkg/network/ - 레거시 네트워크 관리 (-> internal/infrastructure/network/)
+   - pkg/utils/ - 유틸리티 함수들 (-> internal/domain/services/)
 
 2. **레거시 파일 제거**
    - cmd/agent/main_legacy.go - 이전 메인 파일
@@ -511,12 +511,12 @@ Error 1054 (42S22): Unknown column 'ip_address' in 'field list'
 ```
 multinic-agent/
 ├── cmd/agent/
-│   └── main.go              # 단일 진입점
+|   └── main.go              # 단일 진입점
 ├── internal/                # 클린 아키텍처 구조
-│   ├── domain/              # 도메인 계층
-│   ├── application/         # 애플리케이션 계층  
-│   ├── infrastructure/      # 인프라스트럭처 계층
-│   └── interfaces/          # 인터페이스 어댑터
+|   ├── domain/              # 도메인 계층
+|   ├── application/         # 애플리케이션 계층  
+|   ├── infrastructure/      # 인프라스트럭처 계층
+|   └── interfaces/          # 인터페이스 어댑터
 ├── deployments/helm/        # Helm 차트
 └── scripts/                 # 배포 스크립트
 ```
@@ -571,7 +571,7 @@ multinic0~9 인터페이스가 OS에 계속 남아있음 (고아 인터페이스
 
 #### 삭제 감지 전략
 - **방안 A (deleted_at 기반)**: Controller가 소프트 삭제 사용 (불가능 - Controller는 하드 삭제 사용)
-- **방안 B (현재 vs DB 비교)**: 현재 시스템의 multinic* 인터페이스와 DB 활성 인터페이스 비교 (✅ 채택)
+- **방안 B (현재 vs DB 비교)**: 현재 시스템의 multinic* 인터페이스와 DB 활성 인터페이스 비교 (채택)
 
 #### 구현 아키텍처
 ```mermaid
@@ -593,9 +593,9 @@ graph TB
 
 **실제 문제 상황:**
 ```
-1. OpenStack에서 인터페이스 삭제 → ip a에서 multinic2 사라짐
-2. Controller가 DB에서 레코드 삭제 → DB에 multinic0, multinic1만 남음  
-3. 하지만 netplan 파일은 그대로 남음 → /etc/netplan/92-multinic2.yaml 존재
+1. OpenStack에서 인터페이스 삭제 -> ip a에서 multinic2 사라짐
+2. Controller가 DB에서 레코드 삭제 -> DB에 multinic0, multinic1만 남음  
+3. 하지만 netplan 파일은 그대로 남음 -> /etc/netplan/92-multinic2.yaml 존재
 4. 기존 Agent 로직: 시스템 인터페이스 vs DB 비교 (부정확)
 ```
 
@@ -721,11 +721,11 @@ func (app *Application) processInterfaceDeletion(ctx context.Context) {
 #### 4. 종합 테스트 및 검증
 
 **포괄적 테스트 커버리지** (`internal/application/usecases/delete_network_test.go`)
-- ✅ **성공적인 고아 파일 정리**: netplan 파일 스캔 → 인터페이스 부재 확인 → 롤백 호출
-- ✅ **고아 파일이 없는 경우**: 정상적으로 빈 결과 반환  
-- ✅ **롤백 실패 처리**: 에러 상황에서도 다른 파일 계속 처리
-- ✅ **파일명 패턴 매칭**: `91-multinic1.yaml` 형식 정확히 처리
-- ✅ **인터페이스 존재 여부 확인**: `ip addr show` 명령어 기반 검증
+- **성공적인 고아 파일 정리**: netplan 파일 스캔 -> 인터페이스 부재 확인 -> 롤백 호출
+- **고아 파일이 없는 경우**: 정상적으로 빈 결과 반환  
+- **롤백 실패 처리**: 에러 상황에서도 다른 파일 계속 처리
+- **파일명 패턴 매칭**: `91-multinic1.yaml` 형식 정확히 처리
+- **인터페이스 존재 여부 확인**: `ip addr show` 명령어 기반 검증
 
 **테스트 결과:**
 ```bash
@@ -751,19 +751,19 @@ func (app *Application) processInterfaceDeletion(ctx context.Context) {
 #### 3. 실전 시나리오 해결
 ```
 시나리오: OpenStack에서 multinic2 삭제
-1. ip a → multinic0, multinic1만 존재 (multinic2 사라짐)
-2. DB → multinic0, multinic1 레코드만 존재  
-3. netplan → 92-multinic2.yaml 파일은 여전히 존재
-4. Agent → 파일 스캔으로 고아 감지 → 92-multinic2.yaml 삭제 → netplan apply
+1. ip a -> multinic0, multinic1만 존재 (multinic2 사라짐)
+2. DB -> multinic0, multinic1 레코드만 존재  
+3. netplan -> 92-multinic2.yaml 파일은 여전히 존재
+4. Agent -> 파일 스캔으로 고아 감지 -> 92-multinic2.yaml 삭제 -> netplan apply
 ```
 
 ### 배포 준비 완료
 
 #### 검증된 기능
-- ✅ **전체 테스트 통과**: 모든 유닛 테스트 및 통합 테스트 성공
-- ✅ **빌드 성공**: `go build ./cmd/agent` 컴파일 완료
-- ✅ **클린 아키텍처 유지**: 기존 설계 패턴 준수
-- ✅ **하위 호환성**: 기존 설정 처리 로직에 영향 없음
+- **전체 테스트 통과**: 모든 유닛 테스트 및 통합 테스트 성공
+- **빌드 성공**: `go build ./cmd/agent` 컴파일 완료
+- **클린 아키텍처 유지**: 기존 설계 패턴 준수
+- **하위 호환성**: 기존 설정 처리 로직에 영향 없음
 
 #### 프로덕션 적용 시 예상 효과
 - **디스크 공간 절약**: 고아 netplan 파일 자동 정리
@@ -798,8 +798,8 @@ INFO "삭제 대상 고아 netplan 파일이 없습니다"  ← 삭제할 파일
 ```
 
 ### 해결책: 로그 레벨 조정
-- **Debug 레벨로 변경**: 삭제할 파일이 없는 경우 → 운영 환경에서 출력 안됨
-- **Info 레벨 유지**: 실제 삭제 작업이 있을 때만 → 중요한 정보만 출력
+- **Debug 레벨로 변경**: 삭제할 파일이 없는 경우 -> 운영 환경에서 출력 안됨
+- **Info 레벨 유지**: 실제 삭제 작업이 있을 때만 -> 중요한 정보만 출력
 
 ### 수정 내용
 ```go
@@ -943,10 +943,10 @@ if !fileExists || isDrifted || iface.Status == entities.StatusPending {
 ```
 
 ### 결과
-- ✅ 컴파일 오류 해결
-- ✅ 테스트 케이스 통과
-- ✅ 구형/신형 netplan 파일 모두 동기화 가능
-- ✅ LOG_LEVEL 환경 변수 적용 확인
+- 컴파일 오류 해결
+- 테스트 케이스 통과
+- 구형/신형 netplan 파일 모두 동기화 가능
+- LOG_LEVEL 환경 변수 적용 확인
 
 ## IP 주소 드리프트 오탐지 문제 해결 (2025-07-10)
 
@@ -977,8 +977,8 @@ fileCIDR = ipNet.String()    // "11.11.11.0/24" (네트워크 CIDR)
 ```
 
 ### 결과
-- ✅ IP 주소가 정확히 비교되어 불필요한 재설정 방지
-- ✅ 네트워크 트래픽 및 시스템 부하 감소
+- IP 주소가 정확히 비교되어 불필요한 재설정 방지
+- 네트워크 트래픽 및 시스템 부하 감소
 
 ## 로그 최적화 (2025-07-10) 
 
@@ -1004,7 +1004,7 @@ if isDrifted {
 - "네트워크 처리 완료" (변경사항 없어도 출력)
 
 #### 해결
-1. **OS 감지 로그**: Info → Debug 레벨로 변경
+1. **OS 감지 로그**: Info -> Debug 레벨로 변경
 2. **처리 인터페이스 로그**: 완전 제거
 3. **처리 완료 로그**: 실제 작업이 있을 때만 출력
    ```go
@@ -1032,10 +1032,10 @@ INFO "네트워크 처리 완료"
 - **에러 발생 시**: 에러 정보만 출력
 
 ### 효과
-- ✅ 로그 가독성 대폭 향상
-- ✅ 디스크 사용량 감소
-- ✅ 실제 중요한 이벤트 식별 용이
-- ✅ 운영 환경에서 노이즈 제거
+- 로그 가독성 대폭 향상
+- 디스크 사용량 감소
+- 실제 중요한 이벤트 식별 용이
+- 운영 환경에서 노이즈 제거
 
 ### Phase 3: Debug 레벨 로그 최적화
 #### 문제
@@ -1226,10 +1226,10 @@ if id == "rhel" || id == "centos" || id == "rocky" ||
 2. **실제 시나리오**:
    ```
    1. DB에서 interface 정보 가져옴 (netplan_success=0)
-   2. netplan 파일 생성 → netplan apply
+   2. netplan 파일 생성 -> netplan apply
    3. OpenStack 포트가 없어서 실제 인터페이스 생성 실패
-   4. 30초 후 고아 감지: 파일은 있는데 인터페이스가 없음 → 삭제
-   5. DB에 여전히 레코드가 있으므로 다시 생성 시도 → 무한 반복
+   4. 30초 후 고아 감지: 파일은 있는데 인터페이스가 없음 -> 삭제
+   5. DB에 여전히 레코드가 있으므로 다시 생성 시도 -> 무한 반복
    ```
 
 ### 해결 방법: DB 기반 고아 감지
@@ -1275,7 +1275,7 @@ if !activeMACAddresses[strings.ToLower(macAddress)] {
    - netplan 파일 내용 파싱 테스트 추가
 
 ### 효과
-- ✅ 생성 실패한 인터페이스를 고아로 잘못 판단하는 문제 해결
-- ✅ DB가 진실의 원천(source of truth)이 되어 일관성 향상
-- ✅ Controller가 삭제한 인터페이스만 정확히 정리
-- ✅ 무한 루프 문제 완전 해결
+- 생성 실패한 인터페이스를 고아로 잘못 판단하는 문제 해결
+- DB가 진실의 원천(source of truth)이 되어 일관성 향상
+- Controller가 삭제한 인터페이스만 정확히 정리
+- 무한 루프 문제 완전 해결

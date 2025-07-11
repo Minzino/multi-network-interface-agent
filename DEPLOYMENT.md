@@ -1,6 +1,6 @@
 # MultiNIC Agent v2 배포 가이드
 
-## 🚀 빠른 시작
+## 빠른 시작
 
 ### 1. 원클릭 배포
 ```bash
@@ -30,7 +30,7 @@ helm install multinic-agent ./deployments/helm -f ./deployments/helm/values-dev.
 helm install multinic-agent ./deployments/helm -f ./deployments/helm/values-prod.yaml
 ```
 
-## 📋 사전 요구사항
+## 사전 요구사항
 
 ### 시스템 요구사항
 - Kubernetes 1.20+
@@ -46,7 +46,7 @@ helm install multinic-agent ./deployments/helm -f ./deployments/helm/values-prod
 - MultiNIC Controller DB 접근 가능
 - `multi_interface` 테이블 존재
 
-## 🔧 설정 옵션
+## 설정 옵션
 
 ### 데이터베이스 설정
 ```yaml
@@ -76,7 +76,7 @@ resources:
     memory: 128Mi
 ```
 
-## 📊 모니터링 및 확인
+## 모니터링 및 확인
 
 ### 배포 상태 확인
 ```bash
@@ -106,7 +106,7 @@ curl http://localhost:8080/
 - 데이터베이스 연결 상태
 - 에이전트 가동 시간
 
-## 🐛 문제 해결
+## 문제 해결
 
 ### 일반적인 문제들
 
@@ -152,7 +152,7 @@ agent:
 #### ERROR 레벨
 오류와 경고만 로그
 
-## 🔄 업그레이드
+## 업그레이드
 
 ### Helm을 통한 업그레이드
 ```bash
@@ -166,7 +166,7 @@ helm upgrade multinic-agent ./deployments/helm -f values-new.yaml
 ### 롤링 업데이트
 DaemonSet은 기본적으로 롤링 업데이트를 지원하여 무중단 업그레이드 가능
 
-## 🗑️ 제거
+## 제거
 
 ### Helm으로 제거
 ```bash
@@ -182,7 +182,7 @@ kubectl delete serviceaccount multinic-agent
 kubectl delete secret multinic-agent-db
 ```
 
-## 📈 성능 최적화
+## 성능 최적화
 
 ### 리소스 튜닝
 - CPU: 인터페이스 수에 따라 조정
@@ -193,7 +193,7 @@ kubectl delete secret multinic-agent-db
 - 프로덕션: 30-60초
 - 대규모 클러스터: 60-120초
 
-## 🔐 보안 고려사항
+## 보안 고려사항
 
 ### 필요한 권한
 - NET_ADMIN: 네트워크 인터페이스 관리
