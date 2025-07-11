@@ -198,7 +198,7 @@ func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) 
 // GetNmcliConnectionMAC는 nmcli connection에서 MAC 주소를 조회합니다
 func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, connName string) (string, error) {
 	// connection의 device 정보를 먼저 확인
-	deviceOutput, err := s.execNmcli(ctx, "-t", "-f", "GENERAL.DEVICES", "connection", "show", connName)
+	deviceOutput, err := s.execNmcli(ctx, "-g", "GENERAL.DEVICES", "connection", "show", connName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get device for connection %s: %w", connName, err)
 	}
@@ -207,18 +207,14 @@ func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, conn
 	// device가 "--"이면 연결되지 않은 상태이므로 설정된 MAC 주소 확인
 	if deviceName == "--" || deviceName == "" {
 		// 설정된 MAC 주소 확인
-		macOutput, err := s.execNmcli(ctx, "-t", "-f", "802-3-ethernet.mac-address", "connection", "show", connName)
+		macOutput, err := s.execNmcli(ctx, "-g", "802-3-ethernet.mac-address", "connection", "show", connName)
 		if err != nil {
 			return "", fmt.Errorf("failed to get configured MAC address for connection %s: %w", connName, err)
 		}
 		
 		macStr := strings.TrimSpace(string(macOutput))
-		// "802-3-ethernet.mac-address:FA:16:3E:00:BE:63" 형식에서 MAC 추출
-		if strings.HasPrefix(macStr, "802-3-ethernet.mac-address:") {
-			mac := strings.TrimPrefix(macStr, "802-3-ethernet.mac-address:")
-			if mac != "" {
-				return mac, nil
-			}
+		if macStr != "" {
+			return macStr, nil
 		}
 		return "", fmt.Errorf("connection %s has empty MAC address", connName)
 	}
