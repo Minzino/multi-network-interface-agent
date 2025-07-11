@@ -50,6 +50,7 @@ func (f *NetworkManagerFactory) CreateNetworkConfigurer() (interfaces.NetworkCon
 	case interfaces.OSTypeRHEL:
 		return NewRHELAdapter(
 			f.commandExecutor,
+			f.fileSystem,
 			f.logger,
 		), nil
 

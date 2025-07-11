@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,9 +14,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// RHELAdapter configures network for RHEL-based OS using nmcli.
+// RHELAdapter configures network for RHEL-based OS using direct file modification.
 type RHELAdapter struct {
 	commandExecutor interfaces.CommandExecutor
+	fileSystem      interfaces.FileSystem
 	logger          *logrus.Logger
 	isContainer     bool // indicates if running in container
 }
@@ -23,6 +25,7 @@ type RHELAdapter struct {
 // NewRHELAdapter creates a new RHELAdapter.
 func NewRHELAdapter(
 	executor interfaces.CommandExecutor,
+	fileSystem interfaces.FileSystem,
 	logger *logrus.Logger,
 ) *RHELAdapter {
 	// Check if running in container by checking if /host exists
@@ -33,6 +36,7 @@ func NewRHELAdapter(
 	
 	return &RHELAdapter{
 		commandExecutor: executor,
+		fileSystem:      fileSystem,
 		logger:          logger,
 		isContainer:     isContainer,
 	}
@@ -56,7 +60,7 @@ func (a *RHELAdapter) execNmcli(ctx context.Context, args ...string) ([]byte, er
 	return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", args...)
 }
 
-// Configure configures network interface using nmcli.
+// Configure configures network interface by directly modifying nmconnection file.
 func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInterface, name entities.InterfaceName) error {
 	ifaceName := name.String()
 	macAddress := iface.MacAddress
@@ -64,7 +68,7 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
 		"mac":       macAddress,
-	}).Info("Starting RHEL interface configuration with nmcli")
+	}).Info("Starting RHEL interface configuration with direct file modification")
 
 	// 1. Find the actual device name by MAC address
 	actualDevice, err := a.findDeviceByMAC(ctx, macAddress)
@@ -78,107 +82,38 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"mac":            macAddress,
 	}).Debug("Found actual device for MAC address")
 
-	// 2. Delete existing connection if any
-	_ = a.Rollback(ctx, ifaceName)
+	// 2. Generate nmconnection file content
+	configPath := filepath.Join(a.GetConfigDir(), ifaceName+".nmconnection")
+	content := a.generateNmConnectionContent(iface, ifaceName, actualDevice)
 
-	// Helper function to execute nmcli commands
-	execNmcli := func(args ...string) error {
-		_, err := a.execNmcli(ctx, args...)
-		return err
-	}
-
-	// 3. Add new connection
-	// Use the actual device name found by MAC address and set the MAC address explicitly
-	addCmd := []string{
-		"connection", "add", "type", "ethernet", "con-name", ifaceName, "ifname", actualDevice,
-		"802-3-ethernet.mac-address", macAddress,
-	}
-	if err := execNmcli(addCmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection add failed: %s", ifaceName), err)
+	// 3. Write the configuration file directly
+	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
 	}
 
-	// 4. Configure IP settings
-	if iface.Address != "" && iface.CIDR != "" {
-		// Static IP configuration
-		// Extract prefix from CIDR (e.g., "10.0.0.0/24" -> "24")
-		parts := strings.Split(iface.CIDR, "/")
-		if len(parts) == 2 {
-			prefix := parts[1]
-			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
-			
-			setIPCmd := []string{"connection", "modify", ifaceName, "ipv4.method", "manual", "ipv4.address", fullAddress}
-			if err := execNmcli(setIPCmd...); err != nil {
-				return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.address configuration failed: %s", ifaceName), err)
-			}
-			
-			a.logger.WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"address":   fullAddress,
-			}).Debug("Static IP configured")
-		} else {
-			a.logger.WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"cidr":      iface.CIDR,
-			}).Warn("Invalid CIDR format, skipping IP configuration")
-		}
-	} else {
-		// No IP configuration - disable IP assignment
-		disableIPv4Cmd := []string{"connection", "modify", ifaceName, "ipv4.method", "disabled"}
-		if err := execNmcli(disableIPv4Cmd...); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.method disabled failed: %s", ifaceName), err)
-		}
-	}
-	
-	// Always disable IPv6
-	disableIPv6Cmd := []string{"connection", "modify", ifaceName, "ipv6.method", "disabled"}
-	if err := execNmcli(disableIPv6Cmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli ipv6.method disabled failed: %s", ifaceName), err)
-	}
-	
-	// 4. Set MTU if specified
-	if iface.MTU > 0 {
-		setMTUCmd := []string{"connection", "modify", ifaceName, "ethernet.mtu", fmt.Sprintf("%d", iface.MTU)}
-		if err := execNmcli(setMTUCmd...); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("nmcli MTU configuration failed: %s", ifaceName), err)
-		}
-		
-		a.logger.WithFields(logrus.Fields{
-			"interface": ifaceName,
-			"mtu":       iface.MTU,
-		}).Debug("MTU configured")
+	a.logger.WithFields(logrus.Fields{
+		"interface":   ifaceName,
+		"config_path": configPath,
+	}).Debug("nmconnection file written")
+
+	// 4. Reload NetworkManager to apply changes
+	if err := a.reloadNetworkManager(ctx); err != nil {
+		a.logger.WithError(err).Warn("NetworkManager reload failed, continuing anyway")
 	}
 
-	// 5. Test configuration before activation (optional reload)
-	// This ensures the configuration is valid
-	reloadCmd := []string{"connection", "reload"}
-	if err := execNmcli(reloadCmd...); err != nil {
-		a.logger.WithError(err).Warn("nmcli connection reload failed, continuing anyway")
-	}
-
-	// 6. Activate connection
-	upCmd := []string{"connection", "up", ifaceName}
-	if err := execNmcli(upCmd...); err != nil {
-		// Rollback on activation failure
-		if rollbackErr := a.Rollback(ctx, ifaceName); rollbackErr != nil {
-			a.logger.WithError(rollbackErr).Warn("Error during rollback after nmcli connection up failure")
-		}
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection up failed: %s", ifaceName), err)
-	}
-
-	// 7. Verify the connection is actually working
-	// Give it a moment to establish
+	// 5. Verify the connection is working
 	time.Sleep(2 * time.Second)
 	
 	if err := a.Validate(ctx, name); err != nil {
-		a.logger.WithError(err).Error("Interface validation failed after activation")
+		a.logger.WithError(err).Error("Interface validation failed after configuration")
 		// Rollback if validation fails
 		if rollbackErr := a.Rollback(ctx, ifaceName); rollbackErr != nil {
 			a.logger.WithError(rollbackErr).Warn("Error during rollback after validation failure")
 		}
-		return errors.NewNetworkError(fmt.Sprintf("Interface validation failed after activation: %s", ifaceName), err)
+		return errors.NewNetworkError(fmt.Sprintf("Interface validation failed after configuration: %s", ifaceName), err)
 	}
 
-	a.logger.WithField("interface", ifaceName).Info("nmcli interface configuration completed")
+	a.logger.WithField("interface", ifaceName).Info("RHEL interface configuration completed")
 	return nil
 }
 
@@ -224,28 +159,22 @@ func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName)
 	return errors.NewNetworkError(fmt.Sprintf("Connection %s not found", ifaceName), nil)
 }
 
-// Rollback removes interface configuration using nmcli.
+// Rollback removes interface configuration by deleting the nmconnection file.
 func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
-	a.logger.WithField("interface", name).Info("Starting nmcli interface rollback/deletion")
+	a.logger.WithField("interface", name).Info("Starting RHEL interface rollback/deletion")
 
-	// Deactivate connection
-	downCmd := []string{"connection", "down", name}
-	_, err := a.execNmcli(ctx, downCmd...)
-	if err != nil {
-		// Not treating as error if connection doesn't exist or already down
-		a.logger.WithError(err).WithField("interface", name).Debug("Error during nmcli connection down (can be ignored)")
+	// 1. Delete the configuration file
+	configPath := filepath.Join(a.GetConfigDir(), name+".nmconnection")
+	if err := a.fileSystem.Remove(configPath); err != nil {
+		a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
 	}
 
-	// Delete connection
-	deleteCmd := []string{"connection", "delete", name}
-	_, err = a.execNmcli(ctx, deleteCmd...)
-	if err != nil {
-		// Not treating as error if connection doesn't exist
-		a.logger.WithError(err).WithField("interface", name).Debug("Error during nmcli connection delete (can be ignored)")
-		return nil // Purpose of rollback is removal, so consider success even if already gone
+	// 2. Reload NetworkManager to apply the removal
+	if err := a.reloadNetworkManager(ctx); err != nil {
+		a.logger.WithError(err).Warn("NetworkManager reload failed during rollback")
 	}
 
-	a.logger.WithField("interface", name).Info("nmcli interface rollback/deletion completed")
+	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
 	return nil
 }
 
@@ -302,4 +231,73 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 	}
 	
 	return "", fmt.Errorf("no ethernet device found with MAC address %s", macAddress)
+}
+
+// generateNmConnectionContent generates the nmconnection file content
+func (a *RHELAdapter) generateNmConnectionContent(iface entities.NetworkInterface, ifaceName, actualDevice string) string {
+	// Generate a simple UUID (for demo purposes - in production, use proper UUID library)
+	uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", 
+		time.Now().Unix(), 
+		time.Now().UnixNano()&0xffff,
+		time.Now().UnixNano()&0xffff,
+		time.Now().UnixNano()&0xffff,
+		time.Now().UnixNano()&0xffffffffffff)
+
+	content := fmt.Sprintf(`[connection]
+id=%s
+uuid=%s
+type=ethernet
+interface-name=%s
+timestamp=%d
+
+[ethernet]
+mac-address=%s`, ifaceName, uuid, actualDevice, time.Now().Unix(), strings.ToUpper(iface.MacAddress))
+
+	// Add MTU if specified
+	if iface.MTU > 0 {
+		content += fmt.Sprintf("\nmtu=%d", iface.MTU)
+	}
+
+	// Add IPv4 configuration
+	content += "\n\n[ipv4]"
+	if iface.Address != "" && iface.CIDR != "" {
+		// Extract prefix from CIDR
+		parts := strings.Split(iface.CIDR, "/")
+		if len(parts) == 2 {
+			prefix := parts[1]
+			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
+			content += fmt.Sprintf("\nmethod=manual\naddress1=%s", fullAddress)
+		} else {
+			content += "\nmethod=disabled"
+		}
+	} else {
+		content += "\nmethod=disabled"
+	}
+
+	// Always disable IPv6
+	content += "\n\n[ipv6]\naddr-gen-mode=default\nmethod=disabled\n\n[proxy]\n"
+
+	return content
+}
+
+// reloadNetworkManager reloads NetworkManager to apply configuration changes
+func (a *RHELAdapter) reloadNetworkManager(ctx context.Context) error {
+	// Try nmcli connection reload first (faster)
+	if _, err := a.execNmcli(ctx, "connection", "reload"); err == nil {
+		a.logger.Debug("NetworkManager connections reloaded successfully")
+		return nil
+	}
+
+	// Fallback to systemctl reload (slower but more reliable)
+	if a.isContainer {
+		// In container, use nsenter to reload on host
+		_, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, 
+			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", 
+			"systemctl", "reload", "NetworkManager")
+		return err
+	}
+	
+	// Direct execution on host
+	_, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "systemctl", "reload", "NetworkManager")
+	return err
 }

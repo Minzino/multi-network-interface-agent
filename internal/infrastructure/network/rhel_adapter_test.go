@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -44,6 +45,41 @@ func (m *MockCommandExecutor) ExecuteWithTimeout(ctx context.Context, timeout ti
 	}
 	mockArgs := m.Called(argList...)
 	return mockArgs.Get(0).([]byte), mockArgs.Error(1)
+}
+
+// MockFileSystem for testing
+type MockFileSystem struct {
+	mock.Mock
+}
+
+func (m *MockFileSystem) ReadFile(path string) ([]byte, error) {
+	args := m.Called(path)
+	return args.Get(0).([]byte), args.Error(1)
+}
+
+func (m *MockFileSystem) WriteFile(path string, data []byte, perm os.FileMode) error {
+	args := m.Called(path, data, perm)
+	return args.Error(0)
+}
+
+func (m *MockFileSystem) Exists(path string) bool {
+	args := m.Called(path)
+	return args.Bool(0)
+}
+
+func (m *MockFileSystem) MkdirAll(path string, perm os.FileMode) error {
+	args := m.Called(path, perm)
+	return args.Error(0)
+}
+
+func (m *MockFileSystem) Remove(path string) error {
+	args := m.Called(path)
+	return args.Error(0)
+}
+
+func (m *MockFileSystem) ListFiles(path string) ([]string, error) {
+	args := m.Called(path)
+	return args.Get(0).([]string), args.Error(1)
 }
 
 func TestRHELAdapter_Configure(t *testing.T) {
@@ -296,7 +332,7 @@ lo         loopback  unmanaged  --`
 			mockExecutor := new(MockCommandExecutor)
 			tt.setupMocks(mockExecutor)
 
-			adapter := NewRHELAdapter(mockExecutor, logrus.New())
+			adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
 			// Interface name is already set in test case
 			
 			err := adapter.Configure(context.Background(), tt.iface, tt.interfaceName)
@@ -392,7 +428,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 			mockExecutor := new(MockCommandExecutor)
 			tt.setupMocks(mockExecutor)
 
-			adapter := NewRHELAdapter(mockExecutor, logrus.New())
+			adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
 			
 			interfaceName := mustCreateInterfaceName("multinic0")
 			err := adapter.Validate(context.Background(), interfaceName)
@@ -447,7 +483,7 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 			mockExecutor := new(MockCommandExecutor)
 			tt.setupMocks(mockExecutor)
 
-			adapter := NewRHELAdapter(mockExecutor, logrus.New())
+			adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
 			err := adapter.Rollback(context.Background(), "multinic0")
 
 			if tt.wantErr {
@@ -467,6 +503,82 @@ func TestRHELAdapter_GetConfigDir(t *testing.T) {
 	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 		Return([]byte(""), errors.New("not found")).Once()
 	
-	adapter := NewRHELAdapter(mockExecutor, logrus.New())
+	adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
 	assert.Equal(t, "/etc/NetworkManager/system-connections", adapter.GetConfigDir())
+}
+
+func TestRHELAdapter_generateNmConnectionContent(t *testing.T) {
+	tests := []struct {
+		name           string
+		iface          entities.NetworkInterface
+		ifaceName      string
+		actualDevice   string
+		expectedFields []string
+	}{
+		{
+			name: "정적 IP와 MTU가 있는 인터페이스",
+			iface: entities.NetworkInterface{
+				MacAddress: "FA:16:3E:BB:93:7A",
+				Address:    "192.168.1.100",
+				CIDR:       "192.168.1.0/24",
+				MTU:        1500,
+			},
+			ifaceName:    "multinic0",
+			actualDevice: "ens7",
+			expectedFields: []string{
+				"id=multinic0",
+				"interface-name=ens7",
+				"mac-address=FA:16:3E:BB:93:7A",
+				"mtu=1500",
+				"method=manual",
+				"address1=192.168.1.100/24",
+				"method=disabled", // IPv6
+			},
+		},
+		{
+			name: "IP 없는 인터페이스",
+			iface: entities.NetworkInterface{
+				MacAddress: "FA:16:3E:C6:48:12",
+				Address:    "",
+				CIDR:       "",
+				MTU:        0,
+			},
+			ifaceName:    "multinic1",
+			actualDevice: "ens8",
+			expectedFields: []string{
+				"id=multinic1",
+				"interface-name=ens8",
+				"mac-address=FA:16:3E:C6:48:12",
+				"method=disabled", // IPv4
+				"method=disabled", // IPv6
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockExecutor := &MockCommandExecutor{}
+			mockFS := &MockFileSystem{}
+			logger := logrus.New()
+
+			// Mock container check
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").
+				Return([]byte{}, assert.AnError).Maybe()
+
+			adapter := NewRHELAdapter(mockExecutor, mockFS, logger)
+			content := adapter.generateNmConnectionContent(tt.iface, tt.ifaceName, tt.actualDevice)
+
+			// Verify all expected fields are present
+			for _, field := range tt.expectedFields {
+				assert.Contains(t, content, field, "Expected field %s not found in content", field)
+			}
+
+			// Verify basic structure
+			assert.Contains(t, content, "[connection]")
+			assert.Contains(t, content, "[ethernet]")
+			assert.Contains(t, content, "[ipv4]")
+			assert.Contains(t, content, "[ipv6]")
+			assert.Contains(t, content, "[proxy]")
+		})
+	}
 }
