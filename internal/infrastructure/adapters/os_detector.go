@@ -33,7 +33,7 @@ func (d *RealOSDetector) DetectOS() (interfaces.OSType, error) {
 		return "", errors.NewSystemError("OS detection failed: no ID field in /etc/os-release file", nil)
 	}
 
-	idLike, _ := releaseInfo["ID_LIKE"]
+	idLike := releaseInfo["ID_LIKE"]
 
 	// OS type determination logic
 	if id == "ubuntu" {

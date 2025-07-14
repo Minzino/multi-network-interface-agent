@@ -33,7 +33,7 @@ func NewRHELAdapter(
 	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
 		isContainer = true
 	}
-	
+
 	return &RHELAdapter{
 		commandExecutor: executor,
 		fileSystem:      fileSystem,
@@ -47,18 +47,6 @@ func NewRHELAdapter(
 func (a *RHELAdapter) GetConfigDir() string {
 	// RHEL uses /etc/sysconfig/network-scripts/ for ifcfg files
 	return "/etc/sysconfig/network-scripts"
-}
-
-// execNmcli is a helper method to execute nmcli commands with nsenter if in container
-func (a *RHELAdapter) execNmcli(ctx context.Context, args ...string) ([]byte, error) {
-	if a.isContainer {
-		// In container environment, use nsenter to run in host namespace
-		cmdArgs := []string{"--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli"}
-		cmdArgs = append(cmdArgs, args...)
-		return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nsenter", cmdArgs...)
-	}
-	// Direct execution on host
-	return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", args...)
 }
 
 // execCommand is a helper method to execute commands with nsenter if in container
@@ -90,9 +78,9 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	}
 
 	a.logger.WithFields(logrus.Fields{
-		"target_name":     ifaceName,
-		"actual_device":   actualDevice,
-		"mac":            macAddress,
+		"target_name":   ifaceName,
+		"actual_device": actualDevice,
+		"mac":           macAddress,
 	}).Debug("Found actual device for MAC address")
 
 	// 2. Check if device name needs to be changed
@@ -133,11 +121,11 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"config_path": configPath,
 		"mac_address": iface.MacAddress,
 	}).Info("About to write ifcfg file")
-	
+
 	// Log the full content in debug mode for troubleshooting
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
-		"content": content,
+		"content":   content,
 	}).Debug("Full ifcfg file content")
 
 	// 4. Write the configuration file
@@ -155,9 +143,14 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"config_path": configPath,
 	}).Info("ifcfg file written successfully")
 
-	// Configuration complete - NetworkManager automatically recognizes the changes
-	a.logger.WithField("interface", ifaceName).Info("Configuration completed successfully")
-	
+	// 5. Restart NetworkManager to apply changes
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Error("NetworkManager restart failed")
+		return errors.NewNetworkError("Failed to restart NetworkManager", err)
+	}
+
+	a.logger.WithField("interface", ifaceName).Info("NetworkManager restarted successfully")
+
 	return nil
 }
 
@@ -182,7 +175,7 @@ func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName)
 		"interface": ifaceName,
 		"output":    string(output),
 	}).Debug("Interface validation successful")
-	
+
 	return nil
 }
 
@@ -192,9 +185,14 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 
 	// 1. Delete the configuration file
 	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+name)
-	
+
 	if err := a.fileSystem.Remove(configPath); err != nil {
 		a.logger.WithError(err).WithField("interface", name).Debug("Error removing ifcfg file (can be ignored)")
+	}
+
+	// 2. Restart NetworkManager to apply the removal
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Warn("NetworkManager restart failed during rollback")
 	}
 
 	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
@@ -205,7 +203,7 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (string, error) {
 	// Get all devices with their general info in one command
 	// Using nmcli device status to get basic device list
-	output, err := a.execNmcli(ctx, "device", "status")
+	output, err := a.execCommand(ctx, "ip", "link", "show")
 	if err != nil {
 		return "", fmt.Errorf("failed to list devices: %w", err)
 	}
@@ -214,7 +212,7 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 	// We'll check each one individually for MAC address
 	lines := strings.Split(string(output), "\n")
 	var devices []string
-	
+
 	// Skip header line
 	for i := 1; i < len(lines); i++ {
 		fields := strings.Fields(lines[i])
@@ -222,14 +220,15 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 			devices = append(devices, fields[0])
 		}
 	}
-	
+
 	// Now check each device for the MAC address
 	targetMAC := strings.ToUpper(macAddress)
-	
+
 	for _, device := range devices {
 		// Get detailed info for this specific device
 		// Using proper nmcli syntax without -f flag for device show
-		detailOutput, err := a.execNmcli(ctx, "-g", "GENERAL.HWADDR", "device", "show", device)
+		// Use ip link show to get MAC address for specific device
+		detailOutput, err := a.execCommand(ctx, "ip", "link", "show", device)
 		if err != nil {
 			// Device might have disappeared, continue to next
 			a.logger.WithFields(logrus.Fields{
@@ -238,12 +237,12 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 			}).Debug("Failed to get device details, skipping")
 			continue
 		}
-		
+
 		// The output will be just the MAC address with -g (get-values) flag
 		// nmcli escapes colons in MAC addresses (e.g., FA\:16\:3E\:BB\:93\:7A)
 		hwaddr := strings.ToUpper(strings.TrimSpace(string(detailOutput)))
 		hwaddr = strings.ReplaceAll(hwaddr, "\\:", ":")
-		
+
 		if hwaddr == targetMAC {
 			a.logger.WithFields(logrus.Fields{
 				"device": device,
@@ -252,7 +251,7 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 			return device, nil
 		}
 	}
-	
+
 	return "", fmt.Errorf("no ethernet device found with MAC address %s", macAddress)
 }
 

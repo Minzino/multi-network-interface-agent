@@ -405,22 +405,6 @@ func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface e
 	return isDrifted
 }
 
-// isNmcliConnectionExists는 nmcli connection이 존재하는지 확인합니다
-func (uc *ConfigureNetworkUseCase) isNmcliConnectionExists(ctx context.Context, connectionName string) bool {
-	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
-	if err != nil {
-		uc.logger.WithError(err).Debug("Failed to list nmcli connections")
-		return false
-	}
-	
-	for _, conn := range connections {
-		if conn == connectionName {
-			return true
-		}
-	}
-	
-	return false
-}
 
 // findNetplanFileForInterface는 해당 인터페이스의 실제 netplan 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName string) string {

@@ -34,30 +34,10 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 
 // GenerateNextName은 사용 가능한 다음 인터페이스 이름을 생성합니다
 func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
-	// RHEL의 경우 nmcli 연결 목록도 확인
-	ctx := context.Background()
-	nmcliConnections, _ := s.ListNmcliConnectionNames(ctx)
-	
-	return s.GenerateNextNameForOS(nmcliConnections)
-}
-
-// GenerateNextNameForOS는 OS에 따라 사용 가능한 다음 이름을 생성합니다
-func (s *InterfaceNamingService) GenerateNextNameForOS(nmcliConnections []string) (entities.InterfaceName, error) {
-	// nmcli connection 이름을 맵으로 변환하여 빠른 조회
-	connMap := make(map[string]bool)
-	for _, conn := range nmcliConnections {
-		connMap[conn] = true
-	}
-	
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
 		
-		// nmcli connection에 있는지 확인
-		if connMap[name] {
-			continue
-		}
-		
-		// 실제 인터페이스로도 존재하는지 확인 (Ubuntu의 경우)
+		// 실제 인터페이스로 존재하는지 확인
 		if s.isInterfaceInUse(name) {
 			continue
 		}
@@ -69,34 +49,16 @@ func (s *InterfaceNamingService) GenerateNextNameForOS(nmcliConnections []string
 	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
 
+
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
 func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (entities.InterfaceName, error) {
-	// OS 타입을 확인하여 RHEL인 경우 nmcli connection을 확인
-	ctx := context.Background()
-	nmcliConnections, _ := s.ListNmcliConnectionNames(ctx)
-	
-	// 먼저 해당 MAC 주소로 이미 설정된 connection이 있는지 확인
+	// 먼저 해당 MAC 주소로 이미 설정된 인터페이스가 있는지 확인
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
 		
-		// RHEL의 경우 nmcli connection 목록에서 확인
-		isUsedInNmcli := false
-		for _, conn := range nmcliConnections {
-			if conn == name {
-				isUsedInNmcli = true
-				// 해당 connection의 MAC 주소 확인
-				existingMAC, err := s.GetNmcliConnectionMAC(ctx, name)
-				if err == nil && strings.EqualFold(existingMAC, macAddress) {
-					// 동일한 MAC 주소를 가진 connection 발견
-					return entities.NewInterfaceName(name)
-				}
-				break
-			}
-		}
-		
-		// Ubuntu의 경우 기존 방식대로 확인
-		if !isUsedInNmcli && s.isInterfaceInUse(name) {
+		// ip 명령어로 MAC 주소 확인
+		if s.isInterfaceInUse(name) {
 			// 해당 인터페이스의 MAC 주소 확인
 			existingMAC, err := s.GetMacAddressForInterface(name)
 			if err == nil && strings.EqualFold(existingMAC, macAddress) {
@@ -107,7 +69,7 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 	}
 	
 	// 기존에 할당된 이름이 없으면 새로운 이름 생성
-	return s.GenerateNextNameForOS(nmcliConnections)
+	return s.GenerateNextName()
 }
 
 // isInterfaceInUse는 인터페이스가 이미 사용 중인지 확인합니다
@@ -154,37 +116,6 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	return matches[1], nil
 }
 
-// execNmcli is a helper method to execute nmcli commands with nsenter if in container
-func (s *InterfaceNamingService) execNmcli(ctx context.Context, args ...string) ([]byte, error) {
-	if s.isContainer {
-		// In container environment, use nsenter to run in host namespace
-		cmdArgs := []string{"--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli"}
-		cmdArgs = append(cmdArgs, args...)
-		return s.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nsenter", cmdArgs...)
-	}
-	// Direct execution on host
-	return s.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", args...)
-}
-
-// ListNmcliConnectionNames는 nmcli에 설정된 모든 연결 프로파일 이름을 반환합니다.
-func (s *InterfaceNamingService) ListNmcliConnectionNames(ctx context.Context) ([]string, error) {
-	output, err := s.execNmcli(ctx, "-t", "-f", "NAME", "c", "show")
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute nmcli connection show: %w", err)
-	}
-
-	lines := strings.Split(string(output), "\n")
-	var names []string
-	for _, line := range lines {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-
-	return names, nil
-}
-
 // ListNetplanFiles는 지정된 디렉토리의 netplan 파일 목록을 반환합니다
 func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) {
 	files, err := s.fileSystem.ListFiles(dir)
@@ -193,45 +124,6 @@ func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) 
 	}
 
 	return files, nil
-}
-
-// GetNmcliConnectionMAC는 nmcli connection에서 MAC 주소를 조회합니다
-func (s *InterfaceNamingService) GetNmcliConnectionMAC(ctx context.Context, connName string) (string, error) {
-	// connection의 device 정보를 먼저 확인
-	deviceOutput, err := s.execNmcli(ctx, "-g", "GENERAL.DEVICES", "connection", "show", connName)
-	if err != nil {
-		return "", fmt.Errorf("failed to get device for connection %s: %w", connName, err)
-	}
-	
-	deviceName := strings.TrimSpace(string(deviceOutput))
-	// device가 "--"이면 연결되지 않은 상태이므로 설정된 MAC 주소 확인
-	if deviceName == "--" || deviceName == "" {
-		// 설정된 MAC 주소 확인
-		macOutput, err := s.execNmcli(ctx, "-g", "802-3-ethernet.mac-address", "connection", "show", connName)
-		if err != nil {
-			return "", fmt.Errorf("failed to get configured MAC address for connection %s: %w", connName, err)
-		}
-		
-		macStr := strings.TrimSpace(string(macOutput))
-		if macStr != "" {
-			return macStr, nil
-		}
-		return "", fmt.Errorf("connection %s has empty MAC address", connName)
-	}
-	
-	// device가 연결되어 있으면 실제 device의 MAC 주소 확인
-	macOutput, err := s.execNmcli(ctx, "-g", "GENERAL.HWADDR", "device", "show", deviceName)
-	if err != nil {
-		return "", fmt.Errorf("failed to get MAC address for device %s: %w", deviceName, err)
-	}
-	
-	macAddr := strings.TrimSpace(string(macOutput))
-	macAddr = strings.ReplaceAll(macAddr, "\\:", ":")
-	if macAddr == "" {
-		return "", fmt.Errorf("device %s has empty MAC address", deviceName)
-	}
-	
-	return macAddr, nil
 }
 
 // GetHostname은 시스템의 호스트네임을 반환합니다
