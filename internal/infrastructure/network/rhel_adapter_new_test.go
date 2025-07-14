@@ -34,7 +34,7 @@ func TestRHELAdapter_Configure_DirectFileModification(t *testing.T) {
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
-				// Container check for adapter initialization
+				// Container check for adapter initialization - now always returns false
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
@@ -93,7 +93,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
-				// Container check for adapter initialization
+				// Container check for adapter initialization - now always returns false
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
@@ -123,7 +123,7 @@ lo         loopback  unmanaged  --`
 			},
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
-				// Container check for adapter initialization
+				// Container check for adapter initialization - now always returns false
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
@@ -199,7 +199,7 @@ func TestRHELAdapter_ValidateConnectionExists(t *testing.T) {
 			name:           "연결이 존재함",
 			connectionName: "multinic0",
 			setupMocks: func(m *MockCommandExecutor) {
-				// Container check for adapter initialization
+				// Container check for adapter initialization - now always returns false
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
@@ -215,7 +215,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 			name:           "연결이 존재하지 않음",
 			connectionName: "multinic0",
 			setupMocks: func(m *MockCommandExecutor) {
-				// Container check for adapter initialization
+				// Container check for adapter initialization - now always returns false
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				

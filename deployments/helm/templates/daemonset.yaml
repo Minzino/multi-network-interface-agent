@@ -69,6 +69,8 @@ spec:
         volumeMounts:
         - name: netplan
           mountPath: /etc/netplan
+        - name: network-manager
+          mountPath: /etc/NetworkManager/system-connections
         - name: multinic-backups
           mountPath: /var/lib/multinic
         - name: host-root
@@ -78,6 +80,10 @@ spec:
       - name: netplan
         hostPath:
           path: /etc/netplan
+          type: DirectoryOrCreate
+      - name: network-manager
+        hostPath:
+          path: /etc/NetworkManager/system-connections
           type: DirectoryOrCreate
       - name: multinic-backups
         hostPath:

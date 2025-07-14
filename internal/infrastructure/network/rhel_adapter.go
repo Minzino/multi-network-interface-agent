@@ -45,10 +45,8 @@ func NewRHELAdapter(
 // GetConfigDir returns the directory path where configuration files are stored
 // RHEL/NetworkManager stores connection profiles in /etc/NetworkManager/system-connections/
 func (a *RHELAdapter) GetConfigDir() string {
-	if a.isContainer {
-		// In container, we need to write to the host's filesystem
-		return "/host/etc/NetworkManager/system-connections"
-	}
+	// Always use the directly mounted volume path
+	// This matches the Ubuntu approach where /etc/netplan is directly mounted
 	return "/etc/NetworkManager/system-connections"
 }
 
@@ -106,83 +104,34 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	}).Debug("Full nmconnection file content")
 
 	// 3. Write the configuration file directly
-	// In container environment, we need to use nsenter to write to host filesystem
-	if a.isContainer {
-		// Instead of creating a temp file, write directly via nsenter
-		hostPath := strings.TrimPrefix(configPath, "/host")
-		
-		// Escape the content for shell command
-		escapedContent := strings.ReplaceAll(content, "'", "'\"'\"'")
-		
-		// Create the file directly on host using echo
-		writeCmd := fmt.Sprintf("echo '%s' > %s && chmod 600 %s", escapedContent, hostPath, hostPath)
-		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, 
-			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
-			"sh", "-c", writeCmd)
-		
-		if err != nil {
-			a.logger.WithError(err).WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"output": string(output),
-				"host_path": hostPath,
-			}).Error("Failed to write nmconnection file to host")
-			return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file to host: %s", hostPath), err)
-		}
-		
-		a.logger.WithFields(logrus.Fields{
-			"interface": ifaceName,
-			"host_path": hostPath,
-		}).Debug("Successfully wrote nmconnection file to host via nsenter")
-		
-		// Update configPath to use host path for verification
-		configPath = hostPath
-	} else {
-		// Direct write on host
-		if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
-		}
+	// With the volume mount, we can write directly like Ubuntu does
+	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
 	}
 
 	// Verify file was actually written
-	// In container, we need to check via nsenter
-	if a.isContainer {
-		checkCmd := fmt.Sprintf("test -f %s && echo 'exists'", configPath)
-		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second,
-			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
-			"sh", "-c", checkCmd)
-		if err != nil || !strings.Contains(string(output), "exists") {
-			return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
-		}
-		
-		// Skip content verification in container - just trust nsenter copy
-		a.logger.WithFields(logrus.Fields{
-			"interface":   ifaceName,
-			"config_path": configPath,
-		}).Info("nmconnection file written and verified successfully via nsenter")
-	} else {
-		// Direct verification on host
-		if !a.fileSystem.Exists(configPath) {
-			return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
-		}
-
-		// Verify file content
-		writtenContent, err := a.fileSystem.ReadFile(configPath)
-		if err != nil {
-			a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
-			return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
-		}
-
-		if len(writtenContent) == 0 {
-			return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
-		}
-		
-		a.logger.WithFields(logrus.Fields{
-			"interface":   ifaceName,
-			"config_path": configPath,
-			"file_size":   len(writtenContent),
-			"file_exists": true,
-		}).Info("nmconnection file written and verified successfully")
+	// With volume mount, we can check directly
+	if !a.fileSystem.Exists(configPath) {
+		return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
 	}
+
+	// Verify file content
+	writtenContent, err := a.fileSystem.ReadFile(configPath)
+	if err != nil {
+		a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
+		return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
+	}
+
+	if len(writtenContent) == 0 {
+		return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
+	}
+	
+	a.logger.WithFields(logrus.Fields{
+		"interface":   ifaceName,
+		"config_path": configPath,
+		"file_size":   len(writtenContent),
+		"file_exists": true,
+	}).Info("nmconnection file written and verified successfully")
 
 
 	// 4. Reload NetworkManager to apply changes
@@ -195,13 +144,7 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 
 	// 5. Force NetworkManager to recognize the new connection
 	// First, try using nmcli to import the connection explicitly
-	// Use the correct path based on container environment
-	nmcliLoadPath := configPath
-	if a.isContainer && strings.HasPrefix(configPath, "/etc/") {
-		// configPath is already adjusted to host path without /host prefix
-		nmcliLoadPath = configPath
-	}
-	importOutput, importErr := a.execNmcli(ctx, "connection", "load", nmcliLoadPath)
+	importOutput, importErr := a.execNmcli(ctx, "connection", "load", configPath)
 	if importErr != nil {
 		a.logger.WithError(importErr).WithFields(logrus.Fields{
 			"interface": ifaceName,
@@ -400,25 +343,9 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 	// 1. Delete the configuration file
 	configPath := filepath.Join(a.GetConfigDir(), name+".nmconnection")
 	
-	if a.isContainer {
-		// In container, use nsenter to remove file from host
-		hostPath := strings.TrimPrefix(configPath, "/host")
-		rmCmd := fmt.Sprintf("rm -f %s", hostPath)
-		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second,
-			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
-			"sh", "-c", rmCmd)
-		if err != nil {
-			a.logger.WithError(err).WithFields(logrus.Fields{
-				"interface": name,
-				"output": string(output),
-				"host_path": hostPath,
-			}).Debug("Error removing nmconnection file via nsenter (can be ignored)")
-		}
-	} else {
-		// Direct removal on host
-		if err := a.fileSystem.Remove(configPath); err != nil {
-			a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
-		}
+	// With volume mount, we can remove directly
+	if err := a.fileSystem.Remove(configPath); err != nil {
+		a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
 	}
 
 	// 2. Reload NetworkManager to apply the removal
@@ -487,29 +414,35 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 
 // generateNmConnectionContent generates the nmconnection file content
 func (a *RHELAdapter) generateNmConnectionContent(iface entities.NetworkInterface, ifaceName, actualDevice string) string {
-	// Generate a more unique UUID to avoid collisions
-	// Using MAC address and interface name as part of the seed
-	macHash := 0
-	for _, b := range iface.MacAddress {
-		macHash = macHash*31 + int(b)
+	// Generate a proper UUID v4
+	b := make([]byte, 16)
+	// Use timestamp and MAC for uniqueness
+	t := time.Now().UnixNano()
+	for i := 0; i < 8; i++ {
+		b[i] = byte(t >> (8 * i))
+	}
+	for i, c := range iface.MacAddress {
+		if i < 8 {
+			b[8+i] = byte(c)
+		}
 	}
 	
-	uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", 
-		uint32(time.Now().Unix()), 
-		uint16(time.Now().UnixNano()&0xffff),
-		uint16((time.Now().UnixNano()>>16)&0xffff) | 0x4000,  // Version 4 UUID
-		uint16((time.Now().UnixNano()>>32)&0x3fff) | 0x8000,  // Variant bits
-		uint64(macHash)^uint64(time.Now().UnixNano()))
+	// Set version (4) and variant bits
+	b[6] = (b[6] & 0x0f) | 0x40 // Version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // Variant is 10
+	
+	uuid := fmt.Sprintf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
 
 	content := fmt.Sprintf(`[connection]
 id=%s
 uuid=%s
 type=ethernet
 interface-name=%s
-timestamp=%d
 
 [ethernet]
-mac-address=%s`, ifaceName, uuid, actualDevice, time.Now().Unix(), strings.ToUpper(iface.MacAddress))
+mac-address=%s`, ifaceName, uuid, actualDevice, strings.ToUpper(iface.MacAddress))
 
 	// Add MTU if specified
 	if iface.MTU > 0 {
