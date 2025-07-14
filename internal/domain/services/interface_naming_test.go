@@ -367,3 +367,68 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 		})
 	}
 }
+
+
+func TestInterfaceNamingService_GetHostname(t *testing.T) {
+	tests := []struct {
+		name         string
+		hostnameOutput string
+		expectError  bool
+		expectedHost string
+	}{
+		{
+			name:           "도메인 접미사가 있는 호스트네임",
+			hostnameOutput: "biz-master1.novalocal",
+			expectError:    false,
+			expectedHost:   "biz-master1",
+		},
+		{
+			name:           "도메인 접미사가 없는 호스트네임",
+			hostnameOutput: "worker-node",
+			expectError:    false,
+			expectedHost:   "worker-node",
+		},
+		{
+			name:           "여러 도메인 레벨",
+			hostnameOutput: "test.example.com",
+			expectError:    false,
+			expectedHost:   "test",
+		},
+		{
+			name:           "빈 호스트네임",
+			hostnameOutput: "",
+			expectError:    true,
+			expectedHost:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := new(MockFileSystem)
+			mockExecutor := new(MockCommandExecutor)
+			
+			// 컨테이너 환경 체크 Mock 추가
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+				Return([]byte(""), fmt.Errorf("not found")).Once()
+			
+			if tt.expectError && tt.hostnameOutput == "" {
+				mockExecutor.On("ExecuteWithTimeout", mock.Anything, 5*time.Second, "hostname").
+					Return([]byte(""), nil).Once()
+			} else {
+				mockExecutor.On("ExecuteWithTimeout", mock.Anything, 5*time.Second, "hostname").
+					Return([]byte(tt.hostnameOutput), nil).Once()
+			}
+
+			service := NewInterfaceNamingService(mockFS, mockExecutor)
+			hostname, err := service.GetHostname()
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedHost, hostname)
+			}
+			mockExecutor.AssertExpectations(t)
+		})
+	}
+}

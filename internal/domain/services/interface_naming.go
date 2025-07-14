@@ -141,5 +141,10 @@ func (s *InterfaceNamingService) GetHostname() (string, error) {
 		return "", fmt.Errorf("hostname is empty")
 	}
 
+	// .novalocal 또는 다른 도메인 접미사 제거 (main.go와 동일한 로직)
+	if idx := strings.Index(hostname, "."); idx != -1 {
+		hostname = hostname[:idx]
+	}
+
 	return hostname, nil
 }
