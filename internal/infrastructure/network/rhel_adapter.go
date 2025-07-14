@@ -202,57 +202,52 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 // findDeviceByMAC finds the actual device name by MAC address
 func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (string, error) {
 	// Get all devices with their general info in one command
-	// Using nmcli device status to get basic device list
 	output, err := a.execCommand(ctx, "ip", "link", "show")
 	if err != nil {
 		return "", fmt.Errorf("failed to list devices: %w", err)
 	}
 
-	// First, get a list of all ethernet devices
-	// We'll check each one individually for MAC address
+	// Parse ip link show output
+	// Format:
+	// 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+	//     link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff
 	lines := strings.Split(string(output), "\n")
-	var devices []string
-
-	// Skip header line
-	for i := 1; i < len(lines); i++ {
-		fields := strings.Fields(lines[i])
-		if len(fields) >= 2 && fields[1] == "ethernet" {
-			devices = append(devices, fields[0])
-		}
-	}
-
-	// Now check each device for the MAC address
-	targetMAC := strings.ToUpper(macAddress)
-
-	for _, device := range devices {
-		// Get detailed info for this specific device
-		// Using proper nmcli syntax without -f flag for device show
-		// Use ip link show to get MAC address for specific device
-		detailOutput, err := a.execCommand(ctx, "ip", "link", "show", device)
-		if err != nil {
-			// Device might have disappeared, continue to next
-			a.logger.WithFields(logrus.Fields{
-				"device": device,
-				"error":  err,
-			}).Debug("Failed to get device details, skipping")
+	targetMAC := strings.ToLower(macAddress)
+	
+	var currentDevice string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-
-		// The output will be just the MAC address with -g (get-values) flag
-		// nmcli escapes colons in MAC addresses (e.g., FA\:16\:3E\:BB\:93\:7A)
-		hwaddr := strings.ToUpper(strings.TrimSpace(string(detailOutput)))
-		hwaddr = strings.ReplaceAll(hwaddr, "\\:", ":")
-
-		if hwaddr == targetMAC {
-			a.logger.WithFields(logrus.Fields{
-				"device": device,
-				"mac":    macAddress,
-			}).Info("Found disconnected device for MAC address")
-			return device, nil
+		
+		// Check if this is a device line (starts with number)
+		if strings.Contains(line, ":") && len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
+			// Extract device name (e.g., "2: eth0:" -> "eth0")
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				currentDevice = strings.TrimSpace(parts[1])
+			}
+		} else if strings.Contains(line, "link/ether") && currentDevice != "" {
+			// This line contains MAC address
+			fields := strings.Fields(line)
+			for i, field := range fields {
+				if field == "link/ether" && i+1 < len(fields) {
+					mac := strings.ToLower(fields[i+1])
+					if mac == targetMAC {
+						a.logger.WithFields(logrus.Fields{
+							"device": currentDevice,
+							"mac":    macAddress,
+						}).Info("Found device for MAC address")
+						return currentDevice, nil
+					}
+					break
+				}
+			}
 		}
 	}
 
-	return "", fmt.Errorf("no ethernet device found with MAC address %s", macAddress)
+	return "", fmt.Errorf("no device found with MAC address %s", macAddress)
 }
 
 // generateIfcfgContent generates the ifcfg file content

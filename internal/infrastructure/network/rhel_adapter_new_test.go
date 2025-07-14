@@ -38,17 +38,15 @@ func TestRHELAdapter_Configure_DirectFileModification(t *testing.T) {
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				// Find device by MAC - first get device list, then check MAC addresses
-				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-eth1       ethernet  disconnected  --
-lo         loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
-					Return([]byte(deviceStatusOutput), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
-					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
-					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				// Find device by MAC using ip link show
+				ipLinkOutput := `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether 11:22:33:44:55:66 brd ff:ff:ff:ff:ff:ff
+3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show").
+					Return([]byte(ipLinkOutput), nil).Once()
 				
 				// Rename device operations
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
@@ -86,17 +84,15 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				// Find device by MAC
-				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-eth1       ethernet  disconnected  --
-lo         loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
-					Return([]byte(deviceStatusOutput), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
-					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
-					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				// Find device by MAC using ip link show
+				ipLinkOutput := `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether 11:22:33:44:55:66 brd ff:ff:ff:ff:ff:ff
+3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show").
+					Return([]byte(ipLinkOutput), nil).Once()
 				
 				// Rename operations succeed
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
@@ -124,17 +120,15 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				// Find device by MAC
-				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-eth1       ethernet  disconnected  --
-lo         loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
-					Return([]byte(deviceStatusOutput), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
-					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
-					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
+				// Find device by MAC using ip link show
+				ipLinkOutput := `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether 11:22:33:44:55:66 brd ff:ff:ff:ff:ff:ff
+3: eth1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+    link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff`
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show").
+					Return([]byte(ipLinkOutput), nil).Once()
 				
 				// Rename operations succeed
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
