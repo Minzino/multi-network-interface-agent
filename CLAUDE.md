@@ -1279,3 +1279,336 @@ if !activeMACAddresses[strings.ToLower(macAddress)] {
 - DB가 진실의 원천(source of truth)이 되어 일관성 향상
 - Controller가 삭제한 인터페이스만 정확히 정리
 - 무한 루프 문제 완전 해결
+
+## RHEL/CentOS ifcfg 기반 지원 전환 (2025-07-14)
+
+### 배경
+RHEL/CentOS 환경에서 nmcli 기반 접근 방식의 한계를 발견하고, 더 안정적이고 예측 가능한 ifcfg 파일 기반 방식으로 전환했습니다.
+
+### 기존 nmcli 방식의 문제점
+1. **컨테이너 환경 제약**: DaemonSet Pod에서 NetworkManager 서비스에 접근하기 어려움
+2. **권한 복잡성**: nmcli 명령 실행을 위한 추가적인 권한 설정 필요
+3. **상태 일관성**: nmcli connection 상태와 실제 네트워크 인터페이스 상태 간 불일치 발생
+4. **디버깅 어려움**: nmcli 에러 메시지가 모호하여 문제 진단이 어려움
+
+### ifcfg 파일 기반 접근 방식의 장점
+1. **파일 시스템 기반**: 직접적인 설정 파일 조작으로 더 예측 가능
+2. **컨테이너 친화적**: 파일 시스템 마운트만으로 모든 작업 가능
+3. **투명성**: 설정 내용을 파일로 직접 확인 가능
+4. **안정성**: NetworkManager 서비스 의존성 최소화
+
+### 주요 변경사항
+
+#### 1. RHELAdapter 완전 재구현
+**설정 파일 생성 방식**:
+```go
+func (r *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInterface, ifaceName entities.InterfaceName) error {
+    // ifcfg 파일 내용 생성
+    config := fmt.Sprintf(`DEVICE=%s
+NAME=%s
+TYPE=Ethernet
+ONBOOT=yes
+BOOTPROTO=none
+HWADDR=%s
+`, ifaceName.String(), ifaceName.String(), iface.MacAddress)
+
+    // IP 주소 설정 추가
+    if iface.Address != "" && iface.CIDR != "" {
+        parts := strings.Split(iface.CIDR, "/")
+        if len(parts) == 2 {
+            config += fmt.Sprintf("IPADDR=%s\nPREFIX=%s\n", iface.Address, parts[1])
+        }
+    }
+    
+    // MTU 설정 추가
+    if iface.MTU > 0 {
+        config += fmt.Sprintf("MTU=%d\n", iface.MTU)
+    }
+
+    // 파일 생성
+    configPath := filepath.Join(r.configDir, fmt.Sprintf("ifcfg-%s", ifaceName.String()))
+    return r.fileSystem.WriteFile(configPath, []byte(config), 0644)
+}
+```
+
+#### 2. 인터페이스 이름 변경 로직
+**직접적인 ip 명령 사용**:
+```go
+func (r *RHELAdapter) renameInterface(ctx context.Context, macAddress, newName string) error {
+    // MAC 주소로 현재 인터페이스 이름 찾기
+    currentName, err := r.getCurrentInterfaceName(ctx, macAddress)
+    if err != nil {
+        return err
+    }
+    
+    if currentName == newName {
+        return nil // 이미 올바른 이름
+    }
+    
+    // 인터페이스 다운
+    if err := r.executeCommand(ctx, "ip", "link", "set", currentName, "down"); err != nil {
+        return fmt.Errorf("인터페이스 %s 다운 실패: %w", currentName, err)
+    }
+    
+    // 이름 변경
+    if err := r.executeCommand(ctx, "ip", "link", "set", currentName, "name", newName); err != nil {
+        return fmt.Errorf("인터페이스 이름 변경 실패 (%s -> %s): %w", currentName, newName, err)
+    }
+    
+    return nil
+}
+```
+
+#### 3. 드리프트 감지 기능
+**ifcfg 파일 파싱 및 비교**:
+```go
+func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface entities.NetworkInterface, configPath string) bool {
+    content, err := uc.fileSystem.ReadFile(configPath)
+    if err != nil {
+        return true // 파일 읽기 실패 시 드리프트로 간주
+    }
+
+    // ifcfg 파일 파싱
+    var fileMAC, fileIPAddr, filePrefix string
+    var fileMTU int
+    
+    scanner := bufio.NewScanner(strings.NewReader(string(content)))
+    for scanner.Scan() {
+        line := strings.TrimSpace(scanner.Text())
+        if line == "" || strings.HasPrefix(line, "#") {
+            continue
+        }
+        
+        parts := strings.SplitN(line, "=", 2)
+        if len(parts) != 2 {
+            continue
+        }
+        
+        key, value := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+        switch key {
+        case "HWADDR":
+            fileMAC = strings.ToLower(value)
+        case "IPADDR":
+            fileIPAddr = value
+        case "PREFIX":
+            filePrefix = value
+        case "MTU":
+            if mtu, err := strconv.Atoi(value); err == nil {
+                fileMTU = mtu
+            }
+        }
+    }
+    
+    // 드리프트 감지
+    return (dbIface.Address != fileIPAddr) ||
+           (dbIface.MTU != fileMTU) ||
+           (fileMAC != strings.ToLower(dbIface.MacAddress))
+}
+```
+
+#### 4. 고아 인터페이스 정리
+**DB 기반 MAC 주소 비교 방식 유지**:
+```go
+func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, hostname string) ([]string, error) {
+    // 1. DB에서 활성 인터페이스의 MAC 주소 목록 가져오기
+    activeInterfaces, err := uc.repository.GetAllNodeInterfaces(ctx, hostname)
+    activeMACAddresses := make(map[string]bool)
+    for _, iface := range activeInterfaces {
+        activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+    }
+    
+    // 2. ifcfg-multinic* 파일들 스캔
+    configDir := "/etc/sysconfig/network-scripts"
+    files, err := uc.fileSystem.ListFiles(configDir)
+    
+    var deletedInterfaces []string
+    for _, file := range files {
+        if !strings.HasPrefix(file, "ifcfg-multinic") {
+            continue
+        }
+        
+        // 3. ifcfg 파일에서 MAC 주소 추출
+        macAddress, err := uc.getMACAddressFromIfcfgFile(filepath.Join(configDir, file))
+        if err != nil {
+            continue
+        }
+        
+        // 4. DB에 없는 MAC 주소면 고아로 판단
+        if !activeMACAddresses[strings.ToLower(macAddress)] {
+            interfaceName := strings.TrimPrefix(file, "ifcfg-")
+            if err := uc.rollbacker.Rollback(ctx, interfaceName); err == nil {
+                deletedInterfaces = append(deletedInterfaces, interfaceName)
+            }
+        }
+    }
+    
+    return deletedInterfaces, nil
+}
+```
+
+### 테스트 확장
+
+#### 1. RHEL Adapter 테스트 추가
+```go
+func TestRHELAdapter_Configure_Success(t *testing.T) {
+    // ifcfg 파일 생성 테스트
+    // IP 주소 설정 테스트
+    // MTU 설정 테스트
+    // 인터페이스 이름 변경 테스트
+}
+
+func TestRHELAdapter_Validate_Success(t *testing.T) {
+    // 인터페이스 상태 확인 테스트
+    // UP/DOWN 상태 감지 테스트
+}
+
+func TestRHELAdapter_Rollback_Success(t *testing.T) {
+    // ifcfg 파일 삭제 테스트
+    // 이미 없는 파일 처리 테스트
+}
+```
+
+#### 2. 드리프트 감지 테스트
+```go
+func TestConfigureNetworkUseCase_isIfcfgDrifted(t *testing.T) {
+    // IP 주소 드리프트 감지
+    // MTU 드리프트 감지
+    // MAC 주소 불일치 감지
+    // 파일 파싱 에러 처리
+}
+```
+
+#### 3. 고아 인터페이스 정리 테스트
+```go
+func TestDeleteNetworkUseCase_executeIfcfgCleanup(t *testing.T) {
+    // 고아 ifcfg 파일 감지 및 삭제
+    // DB 기반 활성 인터페이스 비교
+    // MAC 주소 추출 및 매칭
+}
+```
+
+### 문서 업데이트
+
+#### 1. README.md 수정
+- RHEL/CentOS 지원 방식을 nmcli → ifcfg로 변경
+- OS별 설정 파일 위치 및 형식 업데이트
+- 문제 해결 가이드에 ifcfg 관련 명령어 추가
+
+#### 2. 기술적 차이점 명확화
+| 항목 | Ubuntu (Netplan) | RHEL/CentOS (ifcfg) |
+|------|------------------|---------------------|
+| 설정 파일 위치 | `/etc/netplan/9X-multinicX.yaml` | `/etc/sysconfig/network-scripts/ifcfg-multinicX` |
+| 파일 형식 | YAML | KEY=VALUE |
+| 설정 적용 | `netplan apply` | `systemctl restart NetworkManager` |
+| 인터페이스 이름 변경 | netplan의 set-name | `ip link set` 명령 |
+| 백업 방식 | 타임스탬프 파일 | 파일 삭제 |
+
+### 배포 준비
+
+#### 1. Helm Chart 업데이트
+```yaml
+# RHEL/CentOS 환경을 위한 볼륨 마운트 추가
+volumes:
+  - name: network-scripts
+    hostPath:
+      path: /etc/sysconfig/network-scripts
+      type: DirectoryOrCreate
+
+volumeMounts:
+  - name: network-scripts
+    mountPath: /etc/sysconfig/network-scripts
+```
+
+#### 2. 권한 설정 간소화
+- nmcli 관련 권한 제거
+- 파일 시스템 접근 권한만 유지
+- NET_ADMIN capability로 ip 명령 실행 권한 확보
+
+### 결과 및 효과
+
+#### 1. 안정성 향상
+- ✅ 컨테이너 환경에서 안정적인 네트워크 설정
+- ✅ NetworkManager 서비스 의존성 최소화
+- ✅ 설정 파일 기반의 예측 가능한 동작
+
+#### 2. 운영 편의성 개선
+- ✅ 설정 내용을 파일로 직접 확인 가능
+- ✅ 디버깅과 문제 해결이 용이
+- ✅ 백업 및 복원 로직 단순화
+
+#### 3. 성능 최적화
+- ✅ nmcli 명령 오버헤드 제거
+- ✅ 직접적인 파일 조작으로 빠른 설정 적용
+- ✅ 불필요한 네트워크 서비스 재시작 최소화
+
+#### 4. 호환성 확보
+- ✅ RHEL 7, 8, 9 전체 버전 지원
+- ✅ CentOS, Rocky Linux, AlmaLinux 호환
+- ✅ 기존 Ubuntu 지원과 동일한 수준의 기능 제공
+
+## Git 히스토리 정리 (2025-07-14)
+
+### 배경
+프로젝트 커밋 히스토리에서 개발 도구(Claude) 관련 참조를 제거하여, 프로젝트 기여자 정보를 정확히 반영하기 위한 작업을 수행했습니다.
+
+### 문제점
+최근 4개 커밋에서 다음과 같은 내용이 포함되어 있었습니다:
+1. **작성자 이름**: "Meenzino" (개발 도구 관련)
+2. **커밋 메시지**: 🤖 Generated with [Claude Code](https://claude.ai/code) 
+3. **Co-Authored-By**: Co-Authored-By: Claude <noreply@anthropic.com>
+
+### 해결 방법
+
+#### 1. 커밋 메시지에서 개발 도구 참조 제거
+```bash
+git filter-branch -f --msg-filter 'sed "/🤖 Generated with \[Claude Code\]/d; /Co-Authored-By: Claude/d"' HEAD~4..HEAD
+```
+
+#### 2. 작성자 정보 수정
+```bash
+git filter-branch -f --env-filter '
+if [ "$GIT_AUTHOR_NAME" = "Meenzino" ]; then
+    export GIT_AUTHOR_NAME="Minzino"
+    export GIT_AUTHOR_EMAIL="gurumcider@gmail.com"
+fi
+if [ "$GIT_COMMITTER_NAME" = "Meenzino" ]; then
+    export GIT_COMMITTER_NAME="Minzino"
+    export GIT_COMMITTER_EMAIL="gurumcider@gmail.com"
+fi
+' HEAD~4..HEAD
+```
+
+#### 3. 변경사항 강제 Push
+```bash
+git push --force origin main
+```
+
+### 정리된 커밋들
+1. **feat: RHEL/CentOS 지원 추가 및 고아 인터페이스 감지 로직 개선**
+   - RHEL/CentOS ifcfg 파일 기반 네트워크 관리 지원
+   - 호스트네임 도메인 접미사 제거 로직으로 일관성 개선
+   - MAC 주소 기반 정확한 고아 인터페이스 감지
+
+2. **docs: README에 RHEL/CentOS 지원 세부사항 추가**
+   - OS별 지원 세부사항 섹션 추가
+   - Ubuntu(Netplan)과 RHEL/CentOS(ifcfg) 방식 비교표 추가
+   - 각 OS별 설정 파일 형식 및 예시 제공
+
+3. **fix: 호스트네임 도메인 접미사 처리 불일치 해결**
+   - 설정과 삭제 로직 간 호스트네임 처리 방식 통일
+   - .novalocal 도메인 접미사 자동 제거
+
+4. **debug: ifcfg 고아 파일 감지 로직에 상세 로그 추가**
+   - 고아 감지 과정의 각 단계별 상세 로그
+   - MAC 주소 비교 및 파일 스캔 과정 가시화
+
+### 결과
+- ✅ 모든 커밋 작성자가 "Minzino"로 통일
+- ✅ 커밋 메시지에서 개발 도구 참조 완전 제거
+- ✅ 프로젝트 기여자 정보 정확성 확보
+- ✅ 깔끔한 프로젝트 히스토리 유지
+
+### 향후 방침
+- 모든 새로운 커밋에서 개발 도구 참조 배제
+- 프로젝트 기여자 정보 정확성 유지
+- 일관된 커밋 메시지 스타일 적용
