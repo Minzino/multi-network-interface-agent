@@ -110,7 +110,9 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		// Rename interface
 		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err != nil {
 			// Try to bring it back up if rename fails
-			a.execCommand(ctx, "ip", "link", "set", actualDevice, "up")
+			if _, bringUpErr := a.execCommand(ctx, "ip", "link", "set", actualDevice, "up"); bringUpErr != nil {
+				a.logger.WithError(bringUpErr).Warn("Failed to bring interface back up after rename failure")
+			}
 			return errors.NewNetworkError(fmt.Sprintf("Failed to rename interface %s to %s", actualDevice, ifaceName), err)
 		}
 

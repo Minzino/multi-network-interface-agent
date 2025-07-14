@@ -33,13 +33,6 @@ type NetplanYAML struct {
 	} `yaml:"network"`
 }
 
-// NmConnectionConfig represents parsed nmconnection file data
-type NmConnectionConfig struct {
-	MacAddress string
-	MTU        int
-	Addresses  []string // IPv4 addresses in CIDR format
-	Method     string   // manual, disabled, etc.
-}
 
 // ConfigureNetworkUseCase는 네트워크 설정을 처리하는 유스케이스입니다
 type ConfigureNetworkUseCase struct {
@@ -123,14 +116,14 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		var shouldProcess bool
 		
 		if osType == interfaces.OSTypeRHEL {
-			// RHEL: nmconnection 파일 존재 여부와 드리프트 감지
+			// RHEL: ifcfg 파일 존재 여부와 드리프트 감지
 			// 파일 기반으로 먼저 확인 (파일이 삭제되면 즉시 감지)
-			configPath := uc.findNmConnectionFile(interfaceName.String())
+			configPath := uc.findIfcfgFile(interfaceName.String())
 			fileExists := configPath != ""
 			
 			isDrifted := false
 			if fileExists {
-				isDrifted = uc.isNmcliConnectionDrifted(ctx, iface, interfaceName.String())
+				isDrifted = uc.isIfcfgDrifted(ctx, iface, configPath)
 			}
 			
 			// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
@@ -317,136 +310,11 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 	return isDrifted
 }
 
-// isNmcliConnectionDrifted는 nmconnection 파일과 DB 데이터 간의 드리프트를 감지합니다
-func (uc *ConfigureNetworkUseCase) isNmcliConnectionDrifted(ctx context.Context, dbIface entities.NetworkInterface, connectionName string) bool {
-	configPath := uc.findNmConnectionFile(connectionName)
-	if configPath == "" {
-		uc.logger.WithFields(logrus.Fields{
-			"interface_id":    dbIface.ID,
-			"connection_name": connectionName,
-		}).Debug("nmconnection file not found, detected as configuration change")
-		return true
-	}
 
-	nmConfig, err := uc.parseNmConnectionFile(configPath)
-	if err != nil {
-		uc.logger.WithError(err).WithField("file", configPath).Warn("Failed to parse nmconnection file, treating as configuration mismatch")
-		return true
-	}
-
-	// MAC 주소 검증
-	if !strings.EqualFold(nmConfig.MacAddress, dbIface.MacAddress) {
-		uc.logger.WithFields(logrus.Fields{
-			"interface_id":   dbIface.ID,
-			"db_mac":         dbIface.MacAddress,
-			"file_mac":       nmConfig.MacAddress,
-			"connection_name": connectionName,
-		}).Warn("MAC address mismatch in nmconnection file, treating as configuration change")
-		return true
-	}
-
-	// IP 주소 및 설정 드리프트 감지
-	var fileAddress, fileCIDR string
-	hasAddresses := len(nmConfig.Addresses) > 0
-	
-	if hasAddresses {
-		// Parse the first address
-		ip, ipNet, err := net.ParseCIDR(nmConfig.Addresses[0])
-		if err == nil {
-			fileAddress = ip.String()
-			fileCIDR = ipNet.String()
-		}
-	}
-
-	// 드리프트 감지 조건
-	isDrifted := (!hasAddresses && dbIface.Address != "") ||
-		(dbIface.Address != fileAddress) ||
-		(dbIface.CIDR != fileCIDR) ||
-		(dbIface.MTU != nmConfig.MTU)
-
-	if isDrifted {
-		uc.logger.WithFields(logrus.Fields{
-			"interface_id":    dbIface.ID,
-			"connection_name": connectionName,
-			"db_address":      dbIface.Address,
-			"file_address":    fileAddress,
-			"db_cidr":         dbIface.CIDR,
-			"file_cidr":       fileCIDR,
-			"db_mtu":          dbIface.MTU,
-			"file_mtu":        nmConfig.MTU,
-			"config_change_1": (!hasAddresses && dbIface.Address != ""),
-			"config_change_2": (dbIface.Address != fileAddress),
-			"config_change_3": (dbIface.CIDR != fileCIDR),
-			"config_change_4": (dbIface.MTU != nmConfig.MTU),
-		}).Debug("nmconnection configuration changes detected")
-	}
-
-	return isDrifted
-}
-
-// parseNmConnectionFile는 nmconnection 파일을 파싱합니다
-func (uc *ConfigureNetworkUseCase) parseNmConnectionFile(filePath string) (*NmConnectionConfig, error) {
-	content, err := uc.fileSystem.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	config := &NmConnectionConfig{
-		Method: "disabled", // 기본값
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(content)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		switch key {
-		case "mac-address":
-			config.MacAddress = value
-		case "mtu":
-			if mtu, err := strconv.Atoi(value); err == nil {
-				config.MTU = mtu
-			}
-		case "method":
-			config.Method = value
-		case "address1", "address2", "address3", "address4", "address5", "addresses":
-			// Handle multiple address formats (address1, address2, etc. and legacy addresses)
-			if key == "addresses" {
-				// Legacy format with semicolon separator
-				addresses := strings.Split(value, ";")
-				for _, addr := range addresses {
-					addr = strings.TrimSpace(addr)
-					if addr != "" {
-						config.Addresses = append(config.Addresses, addr)
-					}
-				}
-			} else {
-				// Modern format (address1, address2, etc.)
-				addr := strings.TrimSpace(value)
-				if addr != "" {
-					config.Addresses = append(config.Addresses, addr)
-				}
-			}
-		}
-	}
-
-	return config, scanner.Err()
-}
-
-// findNmConnectionFile는 해당 connection의 nmconnection 파일을 찾습니다
-func (uc *ConfigureNetworkUseCase) findNmConnectionFile(connectionName string) string {
+// findIfcfgFile는 해당 인터페이스의 ifcfg 파일을 찾습니다
+func (uc *ConfigureNetworkUseCase) findIfcfgFile(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
-	fileName := connectionName + ".nmconnection"
+	fileName := "ifcfg-" + interfaceName
 	filePath := filepath.Join(configDir, fileName)
 	
 	if uc.fileSystem.Exists(filePath) {
@@ -454,6 +322,87 @@ func (uc *ConfigureNetworkUseCase) findNmConnectionFile(connectionName string) s
 	}
 	
 	return ""
+}
+
+// isIfcfgDrifted는 ifcfg 파일과 DB 데이터 간의 드리프트를 감지합니다
+func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface entities.NetworkInterface, configPath string) bool {
+	content, err := uc.fileSystem.ReadFile(configPath)
+	if err != nil {
+		uc.logger.WithError(err).WithField("file", configPath).Warn("Failed to read ifcfg file, treating as configuration mismatch")
+		return true
+	}
+
+	// Parse ifcfg file
+	var fileMAC, fileIPAddr, filePrefix string
+	var fileMTU int
+	
+	scanner := bufio.NewScanner(strings.NewReader(string(content)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		
+		switch key {
+		case "HWADDR":
+			fileMAC = strings.ToLower(value)
+		case "IPADDR":
+			fileIPAddr = value
+		case "PREFIX":
+			filePrefix = value
+		case "MTU":
+			if mtu, err := strconv.Atoi(value); err == nil {
+				fileMTU = mtu
+			}
+		}
+	}
+	
+	// MAC 주소가 일치하지 않으면 심각한 문제
+	if fileMAC != strings.ToLower(dbIface.MacAddress) {
+		uc.logger.WithFields(logrus.Fields{
+			"db_mac":   dbIface.MacAddress,
+			"file_mac": fileMAC,
+		}).Warn("MAC address mismatch in ifcfg file")
+		return true
+	}
+	
+	// IP 주소 드리프트 체크
+	isDrifted := (dbIface.Address != fileIPAddr)
+	
+	// CIDR 드리프트 체크 (PREFIX와 비교)
+	if dbIface.CIDR != "" && filePrefix != "" {
+		parts := strings.Split(dbIface.CIDR, "/")
+		if len(parts) == 2 && parts[1] != filePrefix {
+			isDrifted = true
+		}
+	}
+	
+	// MTU 드리프트 체크
+	if dbIface.MTU != fileMTU {
+		isDrifted = true
+	}
+	
+	if isDrifted {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_id":    dbIface.ID,
+			"db_address":      dbIface.Address,
+			"file_address":    fileIPAddr,
+			"db_cidr":         dbIface.CIDR,
+			"file_prefix":     filePrefix,
+			"db_mtu":          dbIface.MTU,
+			"file_mtu":        fileMTU,
+		}).Debug("ifcfg configuration drift detected")
+	}
+	
+	return isDrifted
 }
 
 // isNmcliConnectionExists는 nmcli connection이 존재하는지 확인합니다

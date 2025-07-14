@@ -88,6 +88,7 @@ func TestDeleteNetworkUseCase_Execute_NetplanFileCleanup_Success(t *testing.T) {
 }
 
 func TestDeleteNetworkUseCase_Execute_NmcliCleanup_Success(t *testing.T) {
+	t.Skip("RHEL now uses ifcfg files, not nmcli connections")
 	// Arrange
 	mockOSDetector := new(MockOSDetector)
 	mockRollbacker := new(MockNetworkRollbacker)
