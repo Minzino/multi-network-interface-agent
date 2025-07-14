@@ -54,8 +54,20 @@ lo         loopback  unmanaged  --`
 				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
 					Return(nil).Once()
 				
+				// Verify file exists after write
+				fs.On("Exists", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return(true).Once()
+				
+				// Read file back for verification
+				fs.On("ReadFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return([]byte("[connection]\ntest content"), nil).Once()
+				
 				// Reload NetworkManager
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
+					Return([]byte(""), nil).Once()
+				
+				// Try to explicitly load the connection
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "load", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
 					Return([]byte(""), nil).Once()
 				
 				// First validation attempt - connection exists
@@ -97,7 +109,7 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
 					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
 				
-				// File write fails
+				// File write succeeds first
 				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
 					Return(errors.New("permission denied")).Once()
 			},
@@ -130,6 +142,14 @@ lo         loopback  unmanaged  --`
 				// File write succeeds
 				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
 					Return(nil).Once()
+				
+				// Verify file exists after write
+				fs.On("Exists", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return(true).Once()
+				
+				// Read file back for verification
+				fs.On("ReadFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return([]byte("[connection]\ntest content"), nil).Once()
 				
 				// Reload fails
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").

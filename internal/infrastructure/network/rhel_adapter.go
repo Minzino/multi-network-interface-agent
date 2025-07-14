@@ -45,6 +45,10 @@ func NewRHELAdapter(
 // GetConfigDir returns the directory path where configuration files are stored
 // RHEL/NetworkManager stores connection profiles in /etc/NetworkManager/system-connections/
 func (a *RHELAdapter) GetConfigDir() string {
+	if a.isContainer {
+		// In container, we need to write to the host's filesystem
+		return "/host/etc/NetworkManager/system-connections"
+	}
 	return "/etc/NetworkManager/system-connections"
 }
 
@@ -89,18 +93,45 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	a.logger.WithFields(logrus.Fields{
 		"interface":   ifaceName,
 		"config_path": configPath,
-		"content_preview": content[:min(len(content), 200)],
-	}).Debug("About to write nmconnection file")
+		"actual_device": actualDevice,
+		"mac_address": iface.MacAddress,
+		"content_length": len(content),
+		"is_container": a.isContainer,
+	}).Info("About to write nmconnection file")
+	
+	// Log the full content in debug mode for troubleshooting
+	a.logger.WithFields(logrus.Fields{
+		"interface": ifaceName,
+		"content": content,
+	}).Debug("Full nmconnection file content")
 
 	// 3. Write the configuration file directly
 	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
 		return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
 	}
 
+	// Verify file was actually written
+	if !a.fileSystem.Exists(configPath) {
+		return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
+	}
+
+	// Verify file content
+	writtenContent, err := a.fileSystem.ReadFile(configPath)
+	if err != nil {
+		a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
+		return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
+	}
+
+	if len(writtenContent) == 0 {
+		return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
+	}
+
 	a.logger.WithFields(logrus.Fields{
 		"interface":   ifaceName,
 		"config_path": configPath,
-	}).Info("nmconnection file written successfully")
+		"file_size":   len(writtenContent),
+		"file_exists": a.fileSystem.Exists(configPath),
+	}).Info("nmconnection file written and verified successfully")
 
 	// 4. Reload NetworkManager to apply changes
 	if err := a.reloadNetworkManager(ctx); err != nil {
@@ -110,10 +141,79 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 
 	a.logger.WithField("interface", ifaceName).Debug("NetworkManager reloaded successfully")
 
-	// 5. Wait for NetworkManager to discover the new connection file
+	// 5. Force NetworkManager to recognize the new connection
+	// First, try using nmcli to import the connection explicitly
+	importOutput, importErr := a.execNmcli(ctx, "connection", "load", configPath)
+	if importErr != nil {
+		a.logger.WithError(importErr).WithFields(logrus.Fields{
+			"interface": ifaceName,
+			"output": string(importOutput),
+			"config_path": configPath,
+		}).Warn("Failed to explicitly load connection file")
+		
+		// If loading failed, try creating connection directly with nmcli as fallback
+		a.logger.WithField("interface", ifaceName).Info("Attempting to create connection directly with nmcli")
+		
+		// Delete the file first to avoid conflicts
+		_ = a.fileSystem.Remove(configPath)
+		
+		// Create connection with nmcli
+		createArgs := []string{"connection", "add", 
+			"type", "ethernet",
+			"con-name", ifaceName,
+			"ifname", actualDevice,
+			"802-3-ethernet.mac-address", strings.ToUpper(iface.MacAddress),
+		}
+		
+		// Add MTU if specified
+		if iface.MTU > 0 {
+			createArgs = append(createArgs, "802-3-ethernet.mtu", fmt.Sprintf("%d", iface.MTU))
+		}
+		
+		// Add IP configuration
+		if iface.Address != "" && iface.CIDR != "" {
+			parts := strings.Split(iface.CIDR, "/")
+			if len(parts) == 2 {
+				prefix := parts[1]
+				fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
+				createArgs = append(createArgs, "ipv4.method", "manual", "ipv4.addresses", fullAddress)
+			} else {
+				createArgs = append(createArgs, "ipv4.method", "disabled")
+			}
+		} else {
+			createArgs = append(createArgs, "ipv4.method", "disabled")
+		}
+		
+		// Disable IPv6
+		createArgs = append(createArgs, "ipv6.method", "disabled")
+		
+		createOutput, createErr := a.execNmcli(ctx, createArgs...)
+		if createErr != nil {
+			a.logger.WithError(createErr).WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"output": string(createOutput),
+			}).Error("Failed to create connection with nmcli")
+			return errors.NewNetworkError(fmt.Sprintf("Failed to create connection %s with nmcli", ifaceName), createErr)
+		}
+		
+		a.logger.WithFields(logrus.Fields{
+			"interface": ifaceName,
+			"output": string(createOutput),
+		}).Info("Connection created successfully with nmcli")
+		
+		// Skip file-based validation since we used nmcli
+		return nil
+	} else {
+		a.logger.WithFields(logrus.Fields{
+			"interface": ifaceName,
+			"output": string(importOutput),
+		}).Debug("Connection file explicitly loaded")
+	}
+
+	// 6. Wait for NetworkManager to discover the new connection file
 	// and then try to activate with retries
-	maxRetries := 3
-	retryDelay := 2 * time.Second
+	maxRetries := 5  // Increased from 3 to 5
+	retryDelay := 3 * time.Second  // Increased from 2 to 3 seconds
 	var lastErr error
 	
 	for i := 0; i < maxRetries; i++ {
@@ -124,6 +224,12 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 				"max_attempts": maxRetries,
 			}).Debug("Retrying connection activation after delay")
 			time.Sleep(retryDelay)
+			
+			// Force reload on retry
+			if i > 2 {
+				a.logger.WithField("interface", ifaceName).Debug("Forcing NetworkManager reload on retry")
+				_ = a.reloadNetworkManager(ctx)
+			}
 		}
 		
 		// Check if connection exists in NetworkManager
@@ -133,6 +239,35 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 				"interface": ifaceName,
 				"attempt":   i + 1,
 			}).Debug("Connection not yet visible to NetworkManager")
+			
+			// On later attempts, check if file still exists
+			if i > 1 && !a.fileSystem.Exists(configPath) {
+				a.logger.WithFields(logrus.Fields{
+					"interface": ifaceName,
+					"config_path": configPath,
+					"attempt": i + 1,
+				}).Error("Configuration file disappeared - NetworkManager may have rejected it")
+				
+				// Check if NetworkManager created a different file
+				configDir := a.GetConfigDir()
+				files, _ := a.fileSystem.ListFiles(configDir)
+				var relatedFiles []string
+				for _, f := range files {
+					if strings.Contains(f, ifaceName) || strings.Contains(f, actualDevice) {
+						relatedFiles = append(relatedFiles, f)
+					}
+				}
+				
+				if len(relatedFiles) > 0 {
+					a.logger.WithFields(logrus.Fields{
+						"interface": ifaceName,
+						"related_files": relatedFiles,
+						"config_dir": configDir,
+					}).Warn("NetworkManager may have created alternative connection files")
+				}
+				
+				return errors.NewNetworkError(fmt.Sprintf("Configuration file %s was removed by NetworkManager", configPath), nil)
+			}
 			continue
 		}
 		
@@ -276,13 +411,19 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 
 // generateNmConnectionContent generates the nmconnection file content
 func (a *RHELAdapter) generateNmConnectionContent(iface entities.NetworkInterface, ifaceName, actualDevice string) string {
-	// Generate a simple UUID (for demo purposes - in production, use proper UUID library)
+	// Generate a more unique UUID to avoid collisions
+	// Using MAC address and interface name as part of the seed
+	macHash := 0
+	for _, b := range iface.MacAddress {
+		macHash = macHash*31 + int(b)
+	}
+	
 	uuid := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", 
-		time.Now().Unix(), 
-		time.Now().UnixNano()&0xffff,
-		time.Now().UnixNano()&0xffff,
-		time.Now().UnixNano()&0xffff,
-		time.Now().UnixNano()&0xffffffffffff)
+		uint32(time.Now().Unix()), 
+		uint16(time.Now().UnixNano()&0xffff),
+		uint16((time.Now().UnixNano()>>16)&0xffff) | 0x4000,  // Version 4 UUID
+		uint16((time.Now().UnixNano()>>32)&0x3fff) | 0x8000,  // Variant bits
+		uint64(macHash)^uint64(time.Now().UnixNano()))
 
 	content := fmt.Sprintf(`[connection]
 id=%s
