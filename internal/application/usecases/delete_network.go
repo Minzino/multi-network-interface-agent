@@ -333,9 +333,18 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 
 	// MAC 주소 맵 생성 (빠른 조회를 위해)
 	activeMACAddresses := make(map[string]bool)
+	var activeMACList []string
 	for _, iface := range activeInterfaces {
-		activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+		macLower := strings.ToLower(iface.MacAddress)
+		activeMACAddresses[macLower] = true
+		activeMACList = append(activeMACList, macLower)
 	}
+	
+	uc.logger.WithFields(logrus.Fields{
+		"node_name":      hostname,
+		"active_macs":    activeMACList,
+		"interface_count": len(activeInterfaces),
+	}).Debug("Active MAC addresses from database for orphan detection")
 
 	for _, fileName := range files {
 		// ifcfg-multinic* 파일만 처리
@@ -353,6 +362,12 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 			}).Warn("Failed to extract MAC address from ifcfg file")
 			continue
 		}
+		
+		uc.logger.WithFields(logrus.Fields{
+			"file_name":   fileName,
+			"file_mac":    strings.ToLower(macAddress),
+			"is_active":   activeMACAddresses[strings.ToLower(macAddress)],
+		}).Debug("Checking ifcfg file for orphan detection")
 
 		// DB에 해당 MAC 주소가 없으면 고아 파일
 		if !activeMACAddresses[strings.ToLower(macAddress)] {
@@ -363,6 +378,12 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 				"mac_address":    macAddress,
 			}).Info("Found orphaned ifcfg file")
 			orphanedFiles = append(orphanedFiles, fileName)
+		} else {
+			// DB에 있는 MAC 주소 - 정상 파일이므로 로그만 출력
+			uc.logger.WithFields(logrus.Fields{
+				"file_name":   fileName,
+				"mac_address": macAddress,
+			}).Debug("ifcfg file belongs to active interface - keeping it")
 		}
 	}
 
