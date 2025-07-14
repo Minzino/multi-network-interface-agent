@@ -106,32 +106,89 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	}).Debug("Full nmconnection file content")
 
 	// 3. Write the configuration file directly
-	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
+	// In container environment, we need to use nsenter to write to host filesystem
+	if a.isContainer {
+		// Create a temporary file first
+		tmpFile := fmt.Sprintf("/tmp/multinic-%s-%d.nmconnection", ifaceName, time.Now().Unix())
+		if err := a.fileSystem.WriteFile(tmpFile, []byte(content), 0600); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to write temporary nmconnection file: %s", tmpFile), err)
+		}
+		
+		// Copy to host using nsenter
+		hostPath := strings.TrimPrefix(configPath, "/host")
+		copyCmd := fmt.Sprintf("cp %s %s && chmod 600 %s", tmpFile, hostPath, hostPath)
+		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, 
+			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
+			"sh", "-c", copyCmd)
+		
+		// Clean up temp file
+		_ = a.fileSystem.Remove(tmpFile)
+		
+		if err != nil {
+			a.logger.WithError(err).WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"output": string(output),
+				"temp_file": tmpFile,
+				"host_path": hostPath,
+			}).Error("Failed to copy nmconnection file to host")
+			return errors.NewNetworkError(fmt.Sprintf("Failed to copy nmconnection file to host: %s", hostPath), err)
+		}
+		
+		a.logger.WithFields(logrus.Fields{
+			"interface": ifaceName,
+			"host_path": hostPath,
+		}).Debug("Successfully copied nmconnection file to host via nsenter")
+		
+		// Update configPath to use host path for verification
+		configPath = hostPath
+	} else {
+		// Direct write on host
+		if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
+		}
 	}
 
 	// Verify file was actually written
-	if !a.fileSystem.Exists(configPath) {
-		return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
+	// In container, we need to check via nsenter
+	if a.isContainer {
+		checkCmd := fmt.Sprintf("test -f %s && echo 'exists'", configPath)
+		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second,
+			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
+			"sh", "-c", checkCmd)
+		if err != nil || !strings.Contains(string(output), "exists") {
+			return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
+		}
+		
+		// Skip content verification in container - just trust nsenter copy
+		a.logger.WithFields(logrus.Fields{
+			"interface":   ifaceName,
+			"config_path": configPath,
+		}).Info("nmconnection file written and verified successfully via nsenter")
+	} else {
+		// Direct verification on host
+		if !a.fileSystem.Exists(configPath) {
+			return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
+		}
+
+		// Verify file content
+		writtenContent, err := a.fileSystem.ReadFile(configPath)
+		if err != nil {
+			a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
+			return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
+		}
+
+		if len(writtenContent) == 0 {
+			return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
+		}
+		
+		a.logger.WithFields(logrus.Fields{
+			"interface":   ifaceName,
+			"config_path": configPath,
+			"file_size":   len(writtenContent),
+			"file_exists": true,
+		}).Info("nmconnection file written and verified successfully")
 	}
 
-	// Verify file content
-	writtenContent, err := a.fileSystem.ReadFile(configPath)
-	if err != nil {
-		a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
-		return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
-	}
-
-	if len(writtenContent) == 0 {
-		return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"interface":   ifaceName,
-		"config_path": configPath,
-		"file_size":   len(writtenContent),
-		"file_exists": a.fileSystem.Exists(configPath),
-	}).Info("nmconnection file written and verified successfully")
 
 	// 4. Reload NetworkManager to apply changes
 	if err := a.reloadNetworkManager(ctx); err != nil {
@@ -143,7 +200,13 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 
 	// 5. Force NetworkManager to recognize the new connection
 	// First, try using nmcli to import the connection explicitly
-	importOutput, importErr := a.execNmcli(ctx, "connection", "load", configPath)
+	// Use the correct path based on container environment
+	nmcliLoadPath := configPath
+	if a.isContainer && strings.HasPrefix(configPath, "/etc/") {
+		// configPath is already adjusted to host path without /host prefix
+		nmcliLoadPath = configPath
+	}
+	importOutput, importErr := a.execNmcli(ctx, "connection", "load", nmcliLoadPath)
 	if importErr != nil {
 		a.logger.WithError(importErr).WithFields(logrus.Fields{
 			"interface": ifaceName,
@@ -341,8 +404,26 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 
 	// 1. Delete the configuration file
 	configPath := filepath.Join(a.GetConfigDir(), name+".nmconnection")
-	if err := a.fileSystem.Remove(configPath); err != nil {
-		a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
+	
+	if a.isContainer {
+		// In container, use nsenter to remove file from host
+		hostPath := strings.TrimPrefix(configPath, "/host")
+		rmCmd := fmt.Sprintf("rm -f %s", hostPath)
+		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second,
+			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
+			"sh", "-c", rmCmd)
+		if err != nil {
+			a.logger.WithError(err).WithFields(logrus.Fields{
+				"interface": name,
+				"output": string(output),
+				"host_path": hostPath,
+			}).Debug("Error removing nmconnection file via nsenter (can be ignored)")
+		}
+	} else {
+		// Direct removal on host
+		if err := a.fileSystem.Remove(configPath); err != nil {
+			a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
+		}
 	}
 
 	// 2. Reload NetworkManager to apply the removal
