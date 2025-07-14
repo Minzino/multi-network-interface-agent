@@ -123,13 +123,18 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		var shouldProcess bool
 		
 		if osType == interfaces.OSTypeRHEL {
-			// RHEL: nmcli connection 존재 여부와 드리프트 감지
-			connectionExists := uc.isNmcliConnectionExists(ctx, interfaceName.String())
+			// RHEL: nmconnection 파일 존재 여부와 드리프트 감지
+			// 파일 기반으로 먼저 확인 (파일이 삭제되면 즉시 감지)
+			configPath := uc.findNmConnectionFile(interfaceName.String())
+			fileExists := configPath != ""
+			
 			isDrifted := false
-			if connectionExists {
+			if fileExists {
 				isDrifted = uc.isNmcliConnectionDrifted(ctx, iface, interfaceName.String())
 			}
-			shouldProcess = !connectionExists || isDrifted || iface.Status == entities.StatusPending
+			
+			// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
+			shouldProcess = !fileExists || isDrifted || iface.Status == entities.StatusPending
 		} else {
 			// Ubuntu: Netplan 파일 기반 처리
 			configPath := uc.findNetplanFileForInterface(interfaceName.String())
