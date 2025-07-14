@@ -66,9 +66,7 @@ lo         loopback  unmanaged  --`
 				fs.On("Exists", "/etc/sysconfig/network-scripts/ifcfg-multinic0").
 					Return(true).Once()
 				
-				// Restart NetworkManager
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "systemctl", "restart", "NetworkManager").
-					Return([]byte(""), nil).Once()
+				// No NetworkManager restart needed
 			},
 			wantErr: false,
 		},
@@ -109,52 +107,6 @@ lo         loopback  unmanaged  --`
 				// File write fails
 				fs.On("WriteFile", "/etc/sysconfig/network-scripts/ifcfg-multinic0", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
 					Return(errors.New("permission denied")).Once()
-			},
-			wantErr:   true,
-			errorType: &multinicErrors.DomainError{Type: multinicErrors.ErrorTypeNetwork},
-		},
-		{
-			name: "NetworkManager restart 실패",
-			iface: entities.NetworkInterface{
-				MacAddress: "fa:16:3e:00:be:63",
-			},
-			interfaceName: mustCreateInterfaceName("multinic0"),
-			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
-				// Container check for adapter initialization - now always returns false
-				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
-					Return([]byte(""), errors.New("not found")).Once()
-				
-				// Find device by MAC
-				deviceStatusOutput := `DEVICE     TYPE      STATE      CONNECTION
-eth0       ethernet  connected  eth0
-eth1       ethernet  disconnected  --
-lo         loopback  unmanaged  --`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "device", "status").
-					Return([]byte(deviceStatusOutput), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth0").
-					Return([]byte("11:22:33:44:55:66\n"), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
-					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
-				
-				// Rename operations succeed
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
-					Return([]byte(""), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "name", "multinic0").
-					Return([]byte(""), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "up").
-					Return([]byte(""), nil).Once()
-				
-				// File write succeeds
-				fs.On("WriteFile", "/etc/sysconfig/network-scripts/ifcfg-multinic0", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
-					Return(nil).Once()
-				
-				// Verify file exists after write
-				fs.On("Exists", "/etc/sysconfig/network-scripts/ifcfg-multinic0").
-					Return(true).Once()
-				
-				// Restart fails
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "systemctl", "restart", "NetworkManager").
-					Return([]byte(""), errors.New("systemctl failed")).Once()
 			},
 			wantErr:   true,
 			errorType: &multinicErrors.DomainError{Type: multinicErrors.ErrorTypeNetwork},

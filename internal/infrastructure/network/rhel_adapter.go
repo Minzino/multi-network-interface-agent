@@ -153,15 +153,9 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"config_path": configPath,
 	}).Info("ifcfg file written successfully")
 
-	// 5. Restart NetworkManager to apply changes
-	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
-		a.logger.WithError(err).Error("NetworkManager restart failed")
-		return errors.NewNetworkError("Failed to restart NetworkManager", err)
-	}
-
-	a.logger.WithField("interface", ifaceName).Info("NetworkManager restarted successfully")
+	// Configuration complete - NetworkManager automatically recognizes the changes
+	a.logger.WithField("interface", ifaceName).Info("Configuration completed successfully")
 	
-	// Configuration complete
 	return nil
 }
 
@@ -199,11 +193,6 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 	
 	if err := a.fileSystem.Remove(configPath); err != nil {
 		a.logger.WithError(err).WithField("interface", name).Debug("Error removing ifcfg file (can be ignored)")
-	}
-
-	// 2. Restart NetworkManager to apply the removal
-	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
-		a.logger.WithError(err).Warn("NetworkManager restart failed during rollback")
 	}
 
 	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
