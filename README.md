@@ -11,7 +11,7 @@ OpenStack 환경에서 다중 네트워크 인터페이스의 **전체 생명주
 - **실시간 설정 동기화**: 데이터베이스의 설정을 시스템에 자동 반영
 - **사용하지 않는 인터페이스 자동 정리**: OpenStack에서 삭제된 인터페이스를 시스템에서도 자동 제거
 - **안전한 설정 적용**: 설정 실패 시 이전 상태로 자동 복구
-- **다중 OS 지원**: Ubuntu(Netplan) 및 RHEL/CentOS(nmcli) 지원
+- **다중 OS 지원**: Ubuntu(Netplan) 및 RHEL/CentOS(ifcfg) 지원
 - **설정 변경 자동 감지**: IP 주소, 네트워크 대역, MTU 등의 변경사항을 실시간으로 감지하고 업데이트
 
 ## 요구사항
@@ -135,8 +135,8 @@ sequenceDiagram
             alt 파일 없음 또는 설정 변경 감지
                 Note over Agent: 새 인터페이스 또는<br/>IP/MTU 변경 감지!
                 Agent->>Agent: multinic[0-9] 이름 할당
-                Agent->>FS: netplan/nmcli 설정 생성
-                Agent->>OS: 설정 적용 (netplan apply)
+                Agent->>FS: netplan/ifcfg 설정 생성
+                Agent->>OS: 설정 적용 (netplan apply/NetworkManager restart)
                 
                 alt 성공
                     Agent->>DB: 상태 업데이트 (success=1)
@@ -252,6 +252,58 @@ docker build -t multinic-agent:latest .
 docker buildx build --platform linux/amd64,linux/arm64 -t multinic-agent:latest .
 ```
 
+## OS별 지원 세부사항
+
+### Ubuntu (Netplan 방식)
+- **설정 파일 위치**: `/etc/netplan/9X-multinicX.yaml`
+- **설정 적용**: `netplan apply` 명령 사용
+- **인터페이스 이름 변경**: 가능 (set-name 속성 사용)
+- **백업**: `/var/lib/multinic/backups/` 디렉토리에 타임스탬프별 백업
+- **지원 버전**: Ubuntu 18.04+
+
+**생성되는 설정 파일 예시**:
+```yaml
+network:
+  version: 2
+  ethernets:
+    multinic0:
+      match:
+        macaddress: "fa:16:3e:5e:62:3e"
+      set-name: multinic0
+      addresses: ["192.168.1.100/24"]
+      mtu: 1500
+```
+
+### RHEL/CentOS (ifcfg 방식)
+- **설정 파일 위치**: `/etc/sysconfig/network-scripts/ifcfg-multinicX`
+- **설정 적용**: `systemctl restart NetworkManager` 사용
+- **인터페이스 이름 변경**: `ip link set` 명령으로 직접 변경
+- **백업**: 파일 삭제 방식으로 롤백
+- **지원 버전**: RHEL/CentOS 7+, Rocky Linux, AlmaLinux
+
+**생성되는 설정 파일 예시**:
+```bash
+DEVICE=multinic0
+NAME=multinic0
+TYPE=Ethernet
+ONBOOT=yes
+BOOTPROTO=none
+IPADDR=192.168.1.100
+PREFIX=24
+MTU=1500
+HWADDR=fa:16:3e:5e:62:3e
+```
+
+### OS별 처리 플로우 차이점
+
+| 항목 | Ubuntu (Netplan) | RHEL/CentOS (ifcfg) |
+|------|------------------|---------------------|
+| 인터페이스 이름 변경 | netplan의 set-name | ip link set 명령 |
+| 설정 파일 형식 | YAML | INI/Shell 형식 |
+| 설정 적용 | netplan apply | NetworkManager restart |
+| 백업 방식 | 타임스탬프 파일 | 파일 삭제 |
+| 안전 모드 | netplan try --timeout=120 | 없음 (즉시 적용) |
+
 ## 문제 해결
 
 ### 에이전트가 시작되지 않을 때
@@ -279,8 +331,11 @@ kubectl exec -n multinic-system <pod-name> -- env | grep DB_
 # 삭제 관련 로그 확인
 kubectl logs -n multinic-system <pod-name> | grep -i "delete\|삭제\|정리"
 
-# 현재 netplan 파일 확인
+# Ubuntu: netplan 파일 확인
 kubectl exec -n multinic-system <pod-name> -- ls -la /etc/netplan/
+
+# RHEL/CentOS: ifcfg 파일 확인
+kubectl exec -n multinic-system <pod-name> -- ls -la /etc/sysconfig/network-scripts/ifcfg-multinic*
 
 # 시스템 인터페이스 확인
 kubectl exec -n multinic-system <pod-name> -- ip addr show | grep multinic
