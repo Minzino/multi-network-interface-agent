@@ -83,18 +83,23 @@ func TestRealOSDetector_DetectOS(t *testing.T) {
 			expectedOS:       interfaces.OSTypeUbuntu,
 		},
 		{
-			name:             "os-release에서 SUSE 감지",
-			osReleaseContent: "NAME=\"SUSE Linux Enterprise Server\"\nID=suse",
-			expectedOS:       interfaces.OSTypeSUSE,
-		},
-		{
 			name:             "os-release에서 RHEL 감지 (ID 필드)",
 			osReleaseContent: "NAME=\"Red Hat Enterprise Linux\"\nID=rhel",
 			expectedOS:       interfaces.OSTypeRHEL,
 		},
 		{
 			name:             "os-release에서 RHEL 계열 감지 (ID_LIKE 필드)",
-			osReleaseContent: "NAME=\"SUSE Liberty Linux\"\nID=sll\nID_LIKE=fedora",
+			osReleaseContent: "NAME=\"CentOS Stream\"\nID=centos\nID_LIKE=\"rhel fedora\"",
+			expectedOS:       interfaces.OSTypeRHEL,
+		},
+		{
+			name:             "os-release에서 Rocky Linux 감지",
+			osReleaseContent: "NAME=\"Rocky Linux\"\nID=rocky\nID_LIKE=\"rhel centos fedora\"",
+			expectedOS:       interfaces.OSTypeRHEL,
+		},
+		{
+			name:             "os-release에서 Oracle Linux 감지",
+			osReleaseContent: "NAME=\"Oracle Linux Server\"\nID=oracle\nID_LIKE=\"fedora\"",
 			expectedOS:       interfaces.OSTypeRHEL,
 		},
 		{

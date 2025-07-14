@@ -57,7 +57,12 @@ func (m *MockCommandExecutor) Execute(ctx context.Context, command string, args 
 }
 
 func (m *MockCommandExecutor) ExecuteWithTimeout(ctx context.Context, timeout time.Duration, command string, args ...string) ([]byte, error) {
-	mockArgs := m.Called(ctx, timeout, command, args)
+	// Convert variadic args to []interface{} for mock.Called
+	callArgs := []interface{}{ctx, timeout, command}
+	for _, arg := range args {
+		callArgs = append(callArgs, arg)
+	}
+	mockArgs := m.Called(callArgs...)
 	return mockArgs.Get(0).([]byte), mockArgs.Error(1)
 }
 
@@ -141,6 +146,12 @@ func TestInterfaceNamingService_GenerateNextName(t *testing.T) {
 			}
 
 			mockExecutor := new(MockCommandExecutor)
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks (naming service에서 사용)
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			// 컨테이너 환경에서 nsenter 사용하는 경우도 대비
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
 			result, err := service.GenerateNextName()
 
@@ -182,6 +193,11 @@ func TestInterfaceNamingService_isInterfaceInUse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockFS := new(MockFileSystem)
 			mockExecutor := new(MockCommandExecutor)
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			expectedPath := fmt.Sprintf("/sys/class/net/%s", tt.interfaceName)
 			mockFS.On("Exists", expectedPath).Return(tt.exists)
 
@@ -249,6 +265,11 @@ func TestInterfaceNamingService_GetCurrentMultinicInterfaces_SystemBased(t *test
 		t.Run(tt.name, func(t *testing.T) {
 			mockFS := new(MockFileSystem)
 			mockExecutor := new(MockCommandExecutor)
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			tt.setupMock(mockFS)
 
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
@@ -287,7 +308,7 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 					mock.AnythingOfType("*context.timerCtx"),
 					mock.AnythingOfType("time.Duration"),
 					"ip",
-					[]string{"addr", "show", "multinic0"}).Return([]byte(ipOutput), nil)
+					"addr", "show", "multinic0").Return([]byte(ipOutput), nil)
 			},
 			expectedMac: "fa:16:3e:b1:29:8f",
 			expectError: false,
@@ -300,7 +321,7 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 					mock.AnythingOfType("*context.timerCtx"),
 					mock.AnythingOfType("time.Duration"),
 					"ip",
-					[]string{"addr", "show", "multinic9"}).Return([]byte(""), fmt.Errorf("Device \"multinic9\" does not exist"))
+					"addr", "show", "multinic9").Return([]byte(""), fmt.Errorf("Device \"multinic9\" does not exist"))
 			},
 			expectedMac: "",
 			expectError: true,
@@ -315,7 +336,7 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 					mock.AnythingOfType("*context.timerCtx"),
 					mock.AnythingOfType("time.Duration"),
 					"ip",
-					[]string{"addr", "show", "multinic1"}).Return([]byte(ipOutput), nil)
+					"addr", "show", "multinic1").Return([]byte(ipOutput), nil)
 			},
 			expectedMac: "",
 			expectError: true,
@@ -326,6 +347,11 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 		t.Run(tt.name, func(t *testing.T) {
 			mockFS := new(MockFileSystem)
 			mockExecutor := new(MockCommandExecutor)
+			// 기본 컨테이너 환경 체크 설정
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+			// RHEL nmcli 명령어 mocks
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
 			tt.setupMock(mockFS, mockExecutor)
 
 			service := NewInterfaceNamingService(mockFS, mockExecutor)
@@ -338,6 +364,71 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 				assert.Equal(t, tt.expectedMac, mac)
 			}
 			mockFS.AssertExpectations(t)
+		})
+	}
+}
+
+
+func TestInterfaceNamingService_GetHostname(t *testing.T) {
+	tests := []struct {
+		name         string
+		hostnameOutput string
+		expectError  bool
+		expectedHost string
+	}{
+		{
+			name:           "도메인 접미사가 있는 호스트네임",
+			hostnameOutput: "biz-master1.novalocal",
+			expectError:    false,
+			expectedHost:   "biz-master1",
+		},
+		{
+			name:           "도메인 접미사가 없는 호스트네임",
+			hostnameOutput: "worker-node",
+			expectError:    false,
+			expectedHost:   "worker-node",
+		},
+		{
+			name:           "여러 도메인 레벨",
+			hostnameOutput: "test.example.com",
+			expectError:    false,
+			expectedHost:   "test",
+		},
+		{
+			name:           "빈 호스트네임",
+			hostnameOutput: "",
+			expectError:    true,
+			expectedHost:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockFS := new(MockFileSystem)
+			mockExecutor := new(MockCommandExecutor)
+			
+			// 컨테이너 환경 체크 Mock 추가
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+				Return([]byte(""), fmt.Errorf("not found")).Once()
+			
+			if tt.expectError && tt.hostnameOutput == "" {
+				mockExecutor.On("ExecuteWithTimeout", mock.Anything, 5*time.Second, "hostname").
+					Return([]byte(""), nil).Once()
+			} else {
+				mockExecutor.On("ExecuteWithTimeout", mock.Anything, 5*time.Second, "hostname").
+					Return([]byte(tt.hostnameOutput), nil).Once()
+			}
+
+			service := NewInterfaceNamingService(mockFS, mockExecutor)
+			hostname, err := service.GetHostname()
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expectedHost, hostname)
+			}
+			mockExecutor.AssertExpectations(t)
 		})
 	}
 }

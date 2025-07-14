@@ -14,13 +14,21 @@ import (
 type InterfaceNamingService struct {
 	fileSystem      interfaces.FileSystem
 	commandExecutor interfaces.CommandExecutor
+	isContainer     bool // indicates if running in container
 }
 
 // NewInterfaceNamingService는 새로운 InterfaceNamingService를 생성합니다
 func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.CommandExecutor) *InterfaceNamingService {
+	// Check if running in container by checking if /host exists
+	isContainer := false
+	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
+		isContainer = true
+	}
+	
 	return &InterfaceNamingService{
 		fileSystem:      fs,
 		commandExecutor: executor,
+		isContainer:     isContainer,
 	}
 }
 
@@ -28,15 +36,19 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
-
-		// 이미 사용 중인지 확인
-		if !s.isInterfaceInUse(name) {
-			return entities.NewInterfaceName(name)
+		
+		// 실제 인터페이스로 존재하는지 확인
+		if s.isInterfaceInUse(name) {
+			continue
 		}
+		
+		// 사용 가능한 이름 발견
+		return entities.NewInterfaceName(name)
 	}
-
+	
 	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
+
 
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
@@ -44,6 +56,8 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 	// 먼저 해당 MAC 주소로 이미 설정된 인터페이스가 있는지 확인
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
+		
+		// ip 명령어로 MAC 주소 확인
 		if s.isInterfaceInUse(name) {
 			// 해당 인터페이스의 MAC 주소 확인
 			existingMAC, err := s.GetMacAddressForInterface(name)
@@ -102,25 +116,6 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	return matches[1], nil
 }
 
-// ListNmcliConnectionNames는 nmcli에 설정된 모든 연결 프로파일 이름을 반환합니다.
-func (s *InterfaceNamingService) ListNmcliConnectionNames(ctx context.Context) ([]string, error) {
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "nmcli", "-t", "-f", "NAME", "c", "show")
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute nmcli connection show: %w", err)
-	}
-
-	lines := strings.Split(string(output), "\n")
-	var names []string
-	for _, line := range lines {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			names = append(names, name)
-		}
-	}
-
-	return names, nil
-}
-
 // ListNetplanFiles는 지정된 디렉토리의 netplan 파일 목록을 반환합니다
 func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) {
 	files, err := s.fileSystem.ListFiles(dir)
@@ -144,6 +139,11 @@ func (s *InterfaceNamingService) GetHostname() (string, error) {
 	hostname := strings.TrimSpace(string(output))
 	if hostname == "" {
 		return "", fmt.Errorf("hostname is empty")
+	}
+
+	// .novalocal 또는 다른 도메인 접미사 제거 (main.go와 동일한 로직)
+	if idx := strings.Index(hostname, "."); idx != -1 {
+		hostname = hostname[:idx]
 	}
 
 	return hostname, nil

@@ -65,7 +65,7 @@ func (uc *DeleteNetworkUseCase) Execute(ctx context.Context, input DeleteNetwork
 	case interfaces.OSTypeUbuntu:
 		return uc.executeNetplanCleanup(ctx, input)
 	case interfaces.OSTypeRHEL:
-		return uc.executeNmcliCleanup(ctx, input)
+		return uc.executeIfcfgCleanup(ctx, input)
 	default:
 		uc.logger.WithField("os_type", osType).Warn("Skipping orphaned interface cleanup for unsupported OS type")
 		return &DeleteNetworkOutput{}, nil
@@ -111,57 +111,54 @@ func (uc *DeleteNetworkUseCase) executeNetplanCleanup(ctx context.Context, input
 	return output, nil
 }
 
-// executeNmcliCleanup은 nmcli (RHEL) 환경의 고아 인터페이스를 정리합니다
-func (uc *DeleteNetworkUseCase) executeNmcliCleanup(ctx context.Context, input DeleteNetworkInput) (*DeleteNetworkOutput, error) {
+// executeIfcfgCleanup은 ifcfg (RHEL) 환경의 고아 인터페이스를 정리합니다
+func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input DeleteNetworkInput) (*DeleteNetworkOutput, error) {
 	output := &DeleteNetworkOutput{
 		DeletedInterfaces: []string{},
 		Errors:            []error{},
 	}
 
-	connections, err := uc.namingService.ListNmcliConnectionNames(ctx)
+	// ifcfg 파일 디렉토리
+	ifcfgDir := "/etc/sysconfig/network-scripts"
+	
+	// 디렉토리의 파일 목록 가져오기
+	files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list nmcli connections: %w", err)
+		return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
 	}
 
-	var orphanedConnections []string
-	for _, connName := range connections {
-		if !strings.HasPrefix(connName, "multinic") {
-			continue
-		}
-
-		exists, err := uc.checkInterfaceExists(ctx, connName)
-		if err != nil {
-			uc.logger.WithFields(logrus.Fields{
-				"connection_name": connName,
-				"error":           err,
-			}).Warn("Error occurred while checking interface existence")
-			continue
-		}
-
-		if !exists {
-			orphanedConnections = append(orphanedConnections, connName)
-		}
+	// 고아 파일 찾기
+	orphanedFiles, err := uc.findOrphanedIfcfgFiles(ctx, files, ifcfgDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find orphaned ifcfg files: %w", err)
 	}
 
-	if len(orphanedConnections) == 0 {
-		uc.logger.Debug("No orphaned nmcli connections to delete")
+	if len(orphanedFiles) == 0 {
+		uc.logger.Debug("No orphaned ifcfg files to delete")
 		return output, nil
 	}
 
 	uc.logger.WithFields(logrus.Fields{
-		"node_name":            input.NodeName,
-		"orphaned_connections": orphanedConnections,
-	}).Info("Orphaned nmcli connections detected - starting cleanup process")
+		"node_name":       input.NodeName,
+		"orphaned_files":  orphanedFiles,
+	}).Info("Orphaned ifcfg files detected - starting cleanup process")
 
-	for _, connName := range orphanedConnections {
-		if err := uc.rollbacker.Rollback(ctx, connName); err != nil {
+	// 고아 파일 삭제
+	for _, fileName := range orphanedFiles {
+		interfaceName := uc.extractInterfaceNameFromIfcfgFile(fileName)
+		if interfaceName == "" {
+			continue
+		}
+
+		if err := uc.rollbacker.Rollback(ctx, interfaceName); err != nil {
 			uc.logger.WithFields(logrus.Fields{
-				"connection_name": connName,
-				"error":           err,
-			}).Error("Failed to delete nmcli connection")
-			output.Errors = append(output.Errors, fmt.Errorf("failed to delete nmcli connection %s: %w", connName, err))
+				"file_name":      fileName,
+				"interface_name": interfaceName,
+				"error":          err,
+			}).Error("Failed to delete ifcfg file")
+			output.Errors = append(output.Errors, fmt.Errorf("failed to delete ifcfg file %s: %w", fileName, err))
 		} else {
-			output.DeletedInterfaces = append(output.DeletedInterfaces, connName)
+			output.DeletedInterfaces = append(output.DeletedInterfaces, interfaceName)
 			output.TotalDeleted++
 		}
 	}
@@ -261,22 +258,6 @@ func (uc *DeleteNetworkUseCase) extractInterfaceNameFromFile(fileName string) st
 	return ""
 }
 
-// checkInterfaceExists는 해당 인터페이스가 실제 시스템에 존재하는지 확인합니다
-func (uc *DeleteNetworkUseCase) checkInterfaceExists(ctx context.Context, interfaceName string) (bool, error) {
-	// ip addr show {interface} 명령으로 인터페이스 존재 여부 확인
-	_, err := uc.namingService.GetMacAddressForInterface(interfaceName)
-	if err != nil {
-		// 인터페이스가 존재하지 않으면 에러가 발생
-		if strings.Contains(err.Error(), "does not exist") ||
-			strings.Contains(err.Error(), "failed to get info") {
-			return false, nil
-		}
-		return false, err
-	}
-
-	// MAC 주소를 성공적으로 조회했다면 인터페이스가 존재함
-	return true, nil
-}
 
 // deleteNetplanFile은 고아 netplan 파일을 삭제하고 netplan을 재적용합니다
 func (uc *DeleteNetworkUseCase) deleteNetplanFile(ctx context.Context, fileName, interfaceName string) error {
@@ -296,6 +277,117 @@ func (uc *DeleteNetworkUseCase) deleteNetplanFile(ctx context.Context, fileName,
 	}).Info("Successfully deleted orphaned netplan file")
 
 	return nil
+}
+
+// isMultinicIfcfgFile은 파일이 multinic 관련 ifcfg 파일인지 확인합니다
+func (uc *DeleteNetworkUseCase) isMultinicIfcfgFile(fileName string) bool {
+	// ifcfg-multinic* 패턴 매칭
+	return strings.HasPrefix(fileName, "ifcfg-multinic")
+}
+
+// extractInterfaceNameFromIfcfgFile은 ifcfg 파일명에서 인터페이스 이름을 추출합니다
+func (uc *DeleteNetworkUseCase) extractInterfaceNameFromIfcfgFile(fileName string) string {
+	// 예: "ifcfg-multinic0" -> "multinic0"
+	if strings.HasPrefix(fileName, "ifcfg-") {
+		return strings.TrimPrefix(fileName, "ifcfg-")
+	}
+	return ""
+}
+
+// getMACAddressFromIfcfgFile은 ifcfg 파일에서 MAC 주소를 추출합니다
+func (uc *DeleteNetworkUseCase) getMACAddressFromIfcfgFile(filePath string) (string, error) {
+	content, err := uc.fileSystem.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// HWADDR 필드 찾기
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "HWADDR=") {
+			// HWADDR=fa:16:3e:00:be:63 형식에서 MAC 주소 추출
+			macAddress := strings.TrimPrefix(line, "HWADDR=")
+			macAddress = strings.Trim(macAddress, "\"'")
+			return macAddress, nil
+		}
+	}
+
+	return "", fmt.Errorf("HWADDR not found in ifcfg file")
+}
+
+// findOrphanedIfcfgFiles는 DB에 없는 MAC 주소의 ifcfg 파일을 찾습니다
+func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, files []string, ifcfgDir string) ([]string, error) {
+	var orphanedFiles []string
+
+	// 현재 노드의 모든 활성 인터페이스 가져오기 (DB에서)
+	hostname, err := uc.namingService.GetHostname()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get hostname: %w", err)
+	}
+
+	activeInterfaces, err := uc.repository.GetAllNodeInterfaces(ctx, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get active interfaces: %w", err)
+	}
+
+	// MAC 주소 맵 생성 (빠른 조회를 위해)
+	activeMACAddresses := make(map[string]bool)
+	var activeMACList []string
+	for _, iface := range activeInterfaces {
+		macLower := strings.ToLower(iface.MacAddress)
+		activeMACAddresses[macLower] = true
+		activeMACList = append(activeMACList, macLower)
+	}
+	
+	uc.logger.WithFields(logrus.Fields{
+		"node_name":      hostname,
+		"active_macs":    activeMACList,
+		"interface_count": len(activeInterfaces),
+	}).Debug("Active MAC addresses from database for orphan detection")
+
+	for _, fileName := range files {
+		// ifcfg-multinic* 파일만 처리
+		if !uc.isMultinicIfcfgFile(fileName) {
+			continue
+		}
+
+		// 파일의 MAC 주소 확인
+		filePath := fmt.Sprintf("%s/%s", ifcfgDir, fileName)
+		macAddress, err := uc.getMACAddressFromIfcfgFile(filePath)
+		if err != nil {
+			uc.logger.WithFields(logrus.Fields{
+				"file_name": fileName,
+				"error":     err.Error(),
+			}).Warn("Failed to extract MAC address from ifcfg file")
+			continue
+		}
+		
+		uc.logger.WithFields(logrus.Fields{
+			"file_name":   fileName,
+			"file_mac":    strings.ToLower(macAddress),
+			"is_active":   activeMACAddresses[strings.ToLower(macAddress)],
+		}).Debug("Checking ifcfg file for orphan detection")
+
+		// DB에 해당 MAC 주소가 없으면 고아 파일
+		if !activeMACAddresses[strings.ToLower(macAddress)] {
+			interfaceName := uc.extractInterfaceNameFromIfcfgFile(fileName)
+			uc.logger.WithFields(logrus.Fields{
+				"file_name":      fileName,
+				"interface_name": interfaceName,
+				"mac_address":    macAddress,
+			}).Info("Found orphaned ifcfg file")
+			orphanedFiles = append(orphanedFiles, fileName)
+		} else {
+			// DB에 있는 MAC 주소 - 정상 파일이므로 로그만 출력
+			uc.logger.WithFields(logrus.Fields{
+				"file_name":   fileName,
+				"mac_address": macAddress,
+			}).Debug("ifcfg file belongs to active interface - keeping it")
+		}
+	}
+
+	return orphanedFiles, nil
 }
 
 // getMACAddressFromNetplanFile은 netplan 파일에서 MAC 주소를 추출합니다

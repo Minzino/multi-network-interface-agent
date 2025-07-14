@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,30 +14,54 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// RHELAdapter configures network for RHEL-based OS using nmcli.
+// RHELAdapter configures network for RHEL-based OS using direct file modification.
 type RHELAdapter struct {
 	commandExecutor interfaces.CommandExecutor
+	fileSystem      interfaces.FileSystem
 	logger          *logrus.Logger
+	isContainer     bool // indicates if running in container
 }
 
 // NewRHELAdapter creates a new RHELAdapter.
 func NewRHELAdapter(
 	executor interfaces.CommandExecutor,
+	fileSystem interfaces.FileSystem,
 	logger *logrus.Logger,
 ) *RHELAdapter {
+	// Check if running in container by checking if /host exists
+	isContainer := false
+	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
+		isContainer = true
+	}
+
 	return &RHELAdapter{
 		commandExecutor: executor,
+		fileSystem:      fileSystem,
 		logger:          logger,
+		isContainer:     isContainer,
 	}
 }
 
 // GetConfigDir returns the directory path where configuration files are stored
-// RHEL uses nmcli so returns empty string instead of actual file path
+// RHEL uses traditional network-scripts directory for interface configuration
 func (a *RHELAdapter) GetConfigDir() string {
-	return ""
+	// RHEL uses /etc/sysconfig/network-scripts/ for ifcfg files
+	return "/etc/sysconfig/network-scripts"
 }
 
-// Configure configures network interface using nmcli.
+// execCommand is a helper method to execute commands with nsenter if in container
+func (a *RHELAdapter) execCommand(ctx context.Context, command string, args ...string) ([]byte, error) {
+	if a.isContainer {
+		// In container environment, use nsenter to run in host namespace
+		cmdArgs := []string{"--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", command}
+		cmdArgs = append(cmdArgs, args...)
+		return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nsenter", cmdArgs...)
+	}
+	// Direct execution on host
+	return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, command, args...)
+}
+
+// Configure configures network interface by renaming device and creating ifcfg file.
 func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInterface, name entities.InterfaceName) error {
 	ifaceName := name.String()
 	macAddress := iface.MacAddress
@@ -44,94 +69,217 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
 		"mac":       macAddress,
-	}).Info("Starting RHEL interface configuration with nmcli")
+	}).Info("Starting RHEL interface configuration with device rename approach")
 
-	// 1. Delete existing connection if any
-	_ = a.Rollback(ctx, ifaceName)
-
-	// 2. Add new connection
-	addCmd := []string{
-		"connection", "add", "type", "ethernet", "con-name", ifaceName, "ifname", ifaceName, "mac", macAddress,
-	}
-	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", addCmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection add failed: %s", ifaceName), err)
+	// 1. Find the actual device name by MAC address
+	actualDevice, err := a.findDeviceByMAC(ctx, macAddress)
+	if err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to find device with MAC %s", macAddress), err)
 	}
 
-	// 3. Disable IP address assignment (connect interface only)
-	disableIPv4Cmd := []string{"connection", "modify", ifaceName, "ipv4.method", "disabled"}
-	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", disableIPv4Cmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli ipv4.method disabled failed: %s", ifaceName), err)
-	}
+	a.logger.WithFields(logrus.Fields{
+		"target_name":   ifaceName,
+		"actual_device": actualDevice,
+		"mac":           macAddress,
+	}).Debug("Found actual device for MAC address")
 
-	disableIPv6Cmd := []string{"connection", "modify", ifaceName, "ipv6.method", "disabled"}
-	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", disableIPv6Cmd...); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli ipv6.method disabled failed: %s", ifaceName), err)
-	}
+	// 2. Check if device name needs to be changed
+	if actualDevice != ifaceName {
+		a.logger.WithFields(logrus.Fields{
+			"from": actualDevice,
+			"to":   ifaceName,
+		}).Info("Renaming network interface")
 
-	// 4. Activate connection
-	upCmd := []string{"connection", "up", ifaceName}
-	if _, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", upCmd...); err != nil {
-		// Rollback on activation failure
-		if rollbackErr := a.Rollback(ctx, ifaceName); rollbackErr != nil {
-			a.logger.WithError(rollbackErr).Warn("Error during rollback after nmcli connection up failure")
+		// Bring interface down
+		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "down"); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to bring down interface %s", actualDevice), err)
 		}
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection up failed: %s", ifaceName), err)
+
+		// Rename interface
+		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err != nil {
+			// Try to bring it back up if rename fails
+			if _, bringUpErr := a.execCommand(ctx, "ip", "link", "set", actualDevice, "up"); bringUpErr != nil {
+				a.logger.WithError(bringUpErr).Warn("Failed to bring interface back up after rename failure")
+			}
+			return errors.NewNetworkError(fmt.Sprintf("Failed to rename interface %s to %s", actualDevice, ifaceName), err)
+		}
+
+		// Bring interface up with new name
+		if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "up"); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to bring up interface %s", ifaceName), err)
+		}
+
+		a.logger.WithField("interface", ifaceName).Info("Interface renamed successfully")
 	}
 
-	a.logger.WithField("interface", ifaceName).Info("nmcli interface configuration completed")
+	// 3. Generate ifcfg file content
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
+	content := a.generateIfcfgContent(iface, ifaceName)
+
+	a.logger.WithFields(logrus.Fields{
+		"interface":   ifaceName,
+		"config_path": configPath,
+		"mac_address": iface.MacAddress,
+	}).Info("About to write ifcfg file")
+
+	// Log the full content in debug mode for troubleshooting
+	a.logger.WithFields(logrus.Fields{
+		"interface": ifaceName,
+		"content":   content,
+	}).Debug("Full ifcfg file content")
+
+	// 4. Write the configuration file
+	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0644); err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to write ifcfg file: %s", configPath), err)
+	}
+
+	// Verify file was actually written
+	if !a.fileSystem.Exists(configPath) {
+		return errors.NewNetworkError(fmt.Sprintf("ifcfg file was not created: %s", configPath), nil)
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"interface":   ifaceName,
+		"config_path": configPath,
+	}).Info("ifcfg file written successfully")
+
+	// 5. Restart NetworkManager to apply changes
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Error("NetworkManager restart failed")
+		return errors.NewNetworkError("Failed to restart NetworkManager", err)
+	}
+
+	a.logger.WithField("interface", ifaceName).Info("NetworkManager restarted successfully")
+
 	return nil
 }
 
-// Validate verifies that the configured interface is properly activated.
+// Validate verifies that the configured interface exists.
 func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName) error {
 	ifaceName := name.String()
-	a.logger.WithField("interface", ifaceName).Info("Starting nmcli interface validation")
+	a.logger.WithField("interface", ifaceName).Debug("Starting interface validation")
 
-	// Check status using `nmcli device status`
-	// Output example: DEVICE  TYPE      STATE      CONNECTION
-	//           eth0    ethernet  connected  eth0
-	//           multinic0 ethernet  connected  multinic0
-	output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", "device", "status")
+	// Check if interface exists using ip command
+	output, err := a.execCommand(ctx, "ip", "link", "show", ifaceName)
 	if err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli device status execution failed: %s", ifaceName), err)
+		return errors.NewNetworkError(fmt.Sprintf("Interface %s not found", ifaceName), err)
 	}
 
+	// Check if ifcfg file exists
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
+	if !a.fileSystem.Exists(configPath) {
+		return errors.NewNetworkError(fmt.Sprintf("Configuration file %s not found", configPath), nil)
+	}
+
+	a.logger.WithFields(logrus.Fields{
+		"interface": ifaceName,
+		"output":    string(output),
+	}).Debug("Interface validation successful")
+
+	return nil
+}
+
+// Rollback removes interface configuration by deleting the ifcfg file.
+func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
+	a.logger.WithField("interface", name).Info("Starting RHEL interface rollback/deletion")
+
+	// 1. Delete the configuration file
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+name)
+
+	if err := a.fileSystem.Remove(configPath); err != nil {
+		a.logger.WithError(err).WithField("interface", name).Debug("Error removing ifcfg file (can be ignored)")
+	}
+
+	// 2. Restart NetworkManager to apply the removal
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Warn("NetworkManager restart failed during rollback")
+	}
+
+	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
+	return nil
+}
+
+// findDeviceByMAC finds the actual device name by MAC address
+func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (string, error) {
+	// Get all devices with their general info in one command
+	output, err := a.execCommand(ctx, "ip", "link", "show")
+	if err != nil {
+		return "", fmt.Errorf("failed to list devices: %w", err)
+	}
+
+	// Parse ip link show output
+	// Format:
+	// 2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+	//     link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff
 	lines := strings.Split(string(output), "\n")
+	targetMAC := strings.ToLower(macAddress)
+	
+	var currentDevice string
 	for _, line := range lines {
-		if strings.HasPrefix(line, ifaceName) {
-			fields := strings.Fields(line)
-			if len(fields) >= 3 && fields[2] == "connected" {
-				a.logger.WithField("interface", ifaceName).Info("nmcli interface validation successful")
-				return nil
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Check if this is a device line (starts with number)
+		if strings.Contains(line, ":") && len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
+			// Extract device name (e.g., "2: eth0:" -> "eth0")
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				currentDevice = strings.TrimSpace(parts[1])
 			}
-			return errors.NewNetworkError(fmt.Sprintf("Interface %s state is not 'connected': %s", ifaceName, line), nil)
+		} else if strings.Contains(line, "link/ether") && currentDevice != "" {
+			// This line contains MAC address
+			fields := strings.Fields(line)
+			for i, field := range fields {
+				if field == "link/ether" && i+1 < len(fields) {
+					mac := strings.ToLower(fields[i+1])
+					if mac == targetMAC {
+						a.logger.WithFields(logrus.Fields{
+							"device": currentDevice,
+							"mac":    macAddress,
+						}).Info("Found device for MAC address")
+						return currentDevice, nil
+					}
+					break
+				}
+			}
 		}
 	}
 
-	return errors.NewNetworkError(fmt.Sprintf("Interface %s not found in nmcli device status output", ifaceName), nil)
+	return "", fmt.Errorf("no device found with MAC address %s", macAddress)
 }
 
-// Rollback removes interface configuration using nmcli.
-func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
-	a.logger.WithField("interface", name).Info("Starting nmcli interface rollback/deletion")
+// generateIfcfgContent generates the ifcfg file content
+func (a *RHELAdapter) generateIfcfgContent(iface entities.NetworkInterface, ifaceName string) string {
+	content := fmt.Sprintf(`DEVICE=%s
+NAME=%s
+TYPE=Ethernet
+ONBOOT=yes
+BOOTPROTO=none`, ifaceName, ifaceName)
 
-	// Deactivate connection
-	downCmd := []string{"connection", "down", name}
-	_, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", downCmd...)
-	if err != nil {
-		// Not treating as error if connection doesn't exist or already down
-		a.logger.WithError(err).WithField("interface", name).Debug("Error during nmcli connection down (can be ignored)")
+	// Add IP configuration if available
+	if iface.Address != "" && iface.CIDR != "" {
+		// Extract prefix from CIDR
+		parts := strings.Split(iface.CIDR, "/")
+		if len(parts) == 2 {
+			prefix := parts[1]
+			content += fmt.Sprintf("\nIPADDR=%s\nPREFIX=%s", iface.Address, prefix)
+		}
 	}
 
-	// Delete connection
-	deleteCmd := []string{"connection", "delete", name}
-	_, err = a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", deleteCmd...)
-	if err != nil {
-		// Not treating as error if connection doesn't exist
-		a.logger.WithError(err).WithField("interface", name).Debug("Error during nmcli connection delete (can be ignored)")
-		return nil // Purpose of rollback is removal, so consider success even if already gone
+	// Add MTU if specified
+	if iface.MTU > 0 {
+		content += fmt.Sprintf("\nMTU=%d", iface.MTU)
 	}
 
-	a.logger.WithField("interface", name).Info("nmcli interface rollback/deletion completed")
-	return nil
+	// Always add MAC address
+	content += fmt.Sprintf("\nHWADDR=%s", strings.ToLower(iface.MacAddress))
+
+	return content
+}
+
+// GenerateIfcfgContentForTest is a test helper method
+func (a *RHELAdapter) GenerateIfcfgContentForTest(iface entities.NetworkInterface, ifaceName string) string {
+	return a.generateIfcfgContent(iface, ifaceName)
 }

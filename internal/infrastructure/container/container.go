@@ -137,6 +137,7 @@ func (c *Container) initializeUseCases() error {
 		rollbacker,
 		c.namingService,
 		c.fileSystem,
+		c.osDetector,
 		c.logger,
 	)
 

@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"multinic-agent/internal/domain/entities"
@@ -32,6 +33,7 @@ type NetplanYAML struct {
 	} `yaml:"network"`
 }
 
+
 // ConfigureNetworkUseCase는 네트워크 설정을 처리하는 유스케이스입니다
 type ConfigureNetworkUseCase struct {
 	repository    interfaces.NetworkInterfaceRepository
@@ -39,6 +41,7 @@ type ConfigureNetworkUseCase struct {
 	rollbacker    interfaces.NetworkRollbacker
 	namingService *services.InterfaceNamingService
 	fileSystem    interfaces.FileSystem // 파일 시스템 의존성 추가
+	osDetector    interfaces.OSDetector
 	logger        *logrus.Logger
 }
 
@@ -49,6 +52,7 @@ func NewConfigureNetworkUseCase(
 	rollbacker interfaces.NetworkRollbacker,
 	naming *services.InterfaceNamingService,
 	fs interfaces.FileSystem, // 파일 시스템 의존성 추가
+	osDetector interfaces.OSDetector,
 	logger *logrus.Logger,
 ) *ConfigureNetworkUseCase {
 	return &ConfigureNetworkUseCase{
@@ -57,6 +61,7 @@ func NewConfigureNetworkUseCase(
 		rollbacker:    rollbacker,
 		namingService: naming,
 		fileSystem:    fs,
+		osDetector:    osDetector,
 		logger:        logger,
 	}
 }
@@ -75,11 +80,23 @@ type ConfigureNetworkOutput struct {
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
 func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureNetworkInput) (*ConfigureNetworkOutput, error) {
+	// OS 타입 감지
+	osType, err := uc.osDetector.DetectOS()
+	if err != nil {
+		return nil, errors.NewSystemError("failed to detect OS type", err)
+	}
+
 	// 1. 해당 노드의 모든 활성 인터페이스 조회 (netplan_success 상태 무관)
 	allInterfaces, err := uc.repository.GetAllNodeInterfaces(ctx, input.NodeName)
 	if err != nil {
 		return nil, errors.NewSystemError("failed to get node interfaces", err)
 	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"node_name": input.NodeName,
+		"interface_count": len(allInterfaces),
+		"os_type": osType,
+	}).Debug("Retrieved interfaces from database")
 
 	// 실제로 처리할 인터페이스가 있을 때만 로그 출력하도록 나중에 확인
 
@@ -95,23 +112,49 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 			continue
 		}
 
-		// 실제 존재하는 Netplan 설정 파일 찾기
-		configPath := uc.findNetplanFileForInterface(interfaceName.String())
-		if configPath == "" {
-			// 파일이 없으면 새로 생성할 경로 설정
-			configPath = filepath.Join(uc.configurer.GetConfigDir(), fmt.Sprintf("9%d-%s.yaml", extractInterfaceIndex(interfaceName.String()), interfaceName.String()))
-		}
+		// OS 타입에 따라 다른 처리
+		var shouldProcess bool
+		
+		if osType == interfaces.OSTypeRHEL {
+			// RHEL: ifcfg 파일 존재 여부와 드리프트 감지
+			// 파일 기반으로 먼저 확인 (파일이 삭제되면 즉시 감지)
+			configPath := uc.findIfcfgFile(interfaceName.String())
+			fileExists := configPath != ""
+			
+			isDrifted := false
+			if fileExists {
+				isDrifted = uc.isIfcfgDrifted(ctx, iface, configPath)
+			}
+			
+			// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
+			shouldProcess = !fileExists || isDrifted || iface.Status == entities.StatusPending
+		} else {
+			// Ubuntu: Netplan 파일 기반 처리
+			configPath := uc.findNetplanFileForInterface(interfaceName.String())
+			if configPath == "" {
+				// 파일이 없으면 새로 생성할 경로 설정
+				configPath = filepath.Join(uc.configurer.GetConfigDir(), fmt.Sprintf("9%d-%s.yaml", extractInterfaceIndex(interfaceName.String()), interfaceName.String()))
+			}
 
-		// 디버그 로그는 드리프트가 감지되거나 처리가 필요한 경우에만 출력
-
-		// 파일이 존재하지 않거나, 드리프트가 발생했거나, 아직 설정되지 않은 경우 처리
-		fileExists := uc.fileSystem.Exists(configPath)
-		isDrifted := false
-		if fileExists {
-			isDrifted = uc.isDrifted(ctx, iface, configPath)
+			// 파일이 존재하지 않거나, 드리프트가 발생했거나, 아직 설정되지 않은 경우 처리
+			fileExists := uc.fileSystem.Exists(configPath)
+			isDrifted := false
+			if fileExists {
+				isDrifted = uc.isDrifted(ctx, iface, configPath)
+			}
+			shouldProcess = !fileExists || isDrifted || iface.Status == entities.StatusPending
 		}
 		
-		if !fileExists || isDrifted || iface.Status == entities.StatusPending {
+		if shouldProcess {
+			uc.logger.WithFields(logrus.Fields{
+				"interface_id":   iface.ID,
+				"interface_name": interfaceName.String(),
+				"mac_address":    iface.MacAddress,
+				"should_process": shouldProcess,
+				"status":         iface.Status,
+				"os_type":        osType,
+			}).Debug("Processing interface")
+			
 			if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
 				uc.logger.WithFields(logrus.Fields{
 					"interface_id":   iface.ID,
@@ -267,6 +310,102 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 	return isDrifted
 }
 
+
+// findIfcfgFile는 해당 인터페이스의 ifcfg 파일을 찾습니다
+func (uc *ConfigureNetworkUseCase) findIfcfgFile(interfaceName string) string {
+	configDir := uc.configurer.GetConfigDir()
+	fileName := "ifcfg-" + interfaceName
+	filePath := filepath.Join(configDir, fileName)
+	
+	if uc.fileSystem.Exists(filePath) {
+		return filePath
+	}
+	
+	return ""
+}
+
+// isIfcfgDrifted는 ifcfg 파일과 DB 데이터 간의 드리프트를 감지합니다
+func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface entities.NetworkInterface, configPath string) bool {
+	content, err := uc.fileSystem.ReadFile(configPath)
+	if err != nil {
+		uc.logger.WithError(err).WithField("file", configPath).Warn("Failed to read ifcfg file, treating as configuration mismatch")
+		return true
+	}
+
+	// Parse ifcfg file
+	var fileMAC, fileIPAddr, filePrefix string
+	var fileMTU int
+	
+	scanner := bufio.NewScanner(strings.NewReader(string(content)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		
+		switch key {
+		case "HWADDR":
+			fileMAC = strings.ToLower(value)
+		case "IPADDR":
+			fileIPAddr = value
+		case "PREFIX":
+			filePrefix = value
+		case "MTU":
+			if mtu, err := strconv.Atoi(value); err == nil {
+				fileMTU = mtu
+			}
+		}
+	}
+	
+	// MAC 주소가 일치하지 않으면 심각한 문제
+	if fileMAC != strings.ToLower(dbIface.MacAddress) {
+		uc.logger.WithFields(logrus.Fields{
+			"db_mac":   dbIface.MacAddress,
+			"file_mac": fileMAC,
+		}).Warn("MAC address mismatch in ifcfg file")
+		return true
+	}
+	
+	// IP 주소 드리프트 체크
+	isDrifted := (dbIface.Address != fileIPAddr)
+	
+	// CIDR 드리프트 체크 (PREFIX와 비교)
+	if dbIface.CIDR != "" && filePrefix != "" {
+		parts := strings.Split(dbIface.CIDR, "/")
+		if len(parts) == 2 && parts[1] != filePrefix {
+			isDrifted = true
+		}
+	}
+	
+	// MTU 드리프트 체크
+	if dbIface.MTU != fileMTU {
+		isDrifted = true
+	}
+	
+	if isDrifted {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_id":    dbIface.ID,
+			"db_address":      dbIface.Address,
+			"file_address":    fileIPAddr,
+			"db_cidr":         dbIface.CIDR,
+			"file_prefix":     filePrefix,
+			"db_mtu":          dbIface.MTU,
+			"file_mtu":        fileMTU,
+		}).Debug("ifcfg configuration drift detected")
+	}
+	
+	return isDrifted
+}
+
+
 // findNetplanFileForInterface는 해당 인터페이스의 실제 netplan 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
@@ -297,3 +436,4 @@ func extractInterfaceIndex(name string) int {
 	}
 	return 0
 }
+
