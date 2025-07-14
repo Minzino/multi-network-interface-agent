@@ -1,6 +1,7 @@
 package config
 
 import (
+	"multinic-agent/internal/domain/constants"
 	"multinic-agent/internal/domain/errors"
 	"os"
 	"strconv"
@@ -57,11 +58,11 @@ func NewEnvironmentConfigLoader() ConfigLoader {
 func (l *EnvironmentConfigLoader) Load() (*Config, error) {
 	config := &Config{
 		Database: DatabaseConfig{
-			Host:         getEnvOrDefault("DB_HOST", "192.168.34.79"),
-			Port:         getEnvOrDefault("DB_PORT", "30305"),
-			User:         getEnvOrDefault("DB_USER", "root"),
-			Password:     getEnvOrDefault("DB_PASSWORD", "cloud1234"),
-			Database:     getEnvOrDefault("DB_NAME", "multinic"),
+			Host:         getEnvOrDefault("DB_HOST", constants.DefaultDBHost),
+			Port:         getEnvOrDefault("DB_PORT", constants.DefaultDBPort),
+			User:         getEnvOrDefault("DB_USER", "root"), // TODO: 기본값 제거, 환경변수 필수로 변경
+			Password:     getEnvOrDefault("DB_PASSWORD", ""), // 보안: 기본값 제거
+			Database:     getEnvOrDefault("DB_NAME", constants.DefaultDBName),
 			MaxOpenConns: getEnvIntOrDefault("DB_MAX_OPEN_CONNS", 10),
 			MaxIdleConns: getEnvIntOrDefault("DB_MAX_IDLE_CONNS", 5),
 			MaxLifetime:  getEnvDurationOrDefault("DB_MAX_LIFETIME", 5*time.Minute),
@@ -71,10 +72,10 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
 			MaxRetries:      getEnvIntOrDefault("MAX_RETRIES", 3),
 			RetryDelay:      getEnvDurationOrDefault("RETRY_DELAY", 2*time.Second),
 			CommandTimeout:  getEnvDurationOrDefault("COMMAND_TIMEOUT", 30*time.Second),
-			BackupDirectory: getEnvOrDefault("BACKUP_DIR", "/var/lib/multinic/backups"),
+			BackupDirectory: getEnvOrDefault("BACKUP_DIR", constants.DefaultBackupDir),
 		},
 		Health: HealthConfig{
-			Port: getEnvOrDefault("HEALTH_PORT", "8080"),
+			Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
 		},
 	}
 
