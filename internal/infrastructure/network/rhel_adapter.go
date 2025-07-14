@@ -108,36 +108,31 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	// 3. Write the configuration file directly
 	// In container environment, we need to use nsenter to write to host filesystem
 	if a.isContainer {
-		// Create a temporary file first
-		tmpFile := fmt.Sprintf("/tmp/multinic-%s-%d.nmconnection", ifaceName, time.Now().Unix())
-		if err := a.fileSystem.WriteFile(tmpFile, []byte(content), 0600); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("Failed to write temporary nmconnection file: %s", tmpFile), err)
-		}
-		
-		// Copy to host using nsenter
+		// Instead of creating a temp file, write directly via nsenter
 		hostPath := strings.TrimPrefix(configPath, "/host")
-		copyCmd := fmt.Sprintf("cp %s %s && chmod 600 %s", tmpFile, hostPath, hostPath)
+		
+		// Escape the content for shell command
+		escapedContent := strings.ReplaceAll(content, "'", "'\"'\"'")
+		
+		// Create the file directly on host using echo
+		writeCmd := fmt.Sprintf("echo '%s' > %s && chmod 600 %s", escapedContent, hostPath, hostPath)
 		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, 
 			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid",
-			"sh", "-c", copyCmd)
-		
-		// Clean up temp file
-		_ = a.fileSystem.Remove(tmpFile)
+			"sh", "-c", writeCmd)
 		
 		if err != nil {
 			a.logger.WithError(err).WithFields(logrus.Fields{
 				"interface": ifaceName,
 				"output": string(output),
-				"temp_file": tmpFile,
 				"host_path": hostPath,
-			}).Error("Failed to copy nmconnection file to host")
-			return errors.NewNetworkError(fmt.Sprintf("Failed to copy nmconnection file to host: %s", hostPath), err)
+			}).Error("Failed to write nmconnection file to host")
+			return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file to host: %s", hostPath), err)
 		}
 		
 		a.logger.WithFields(logrus.Fields{
 			"interface": ifaceName,
 			"host_path": hostPath,
-		}).Debug("Successfully copied nmconnection file to host via nsenter")
+		}).Debug("Successfully wrote nmconnection file to host via nsenter")
 		
 		// Update configPath to use host path for verification
 		configPath = hostPath
