@@ -354,7 +354,7 @@ lo         loopback  unmanaged  --`
 	}
 }
 
-func TestRHELAdapter_Validate(t *testing.T) {
+func TestRHELAdapter_Validate_Old(t *testing.T) {
 	tests := []struct {
 		name          string
 		setupMocks    func(*MockCommandExecutor)
@@ -513,10 +513,10 @@ func TestRHELAdapter_GetConfigDir(t *testing.T) {
 		Return([]byte(""), errors.New("not found")).Once()
 	
 	adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
-	assert.Equal(t, "/etc/NetworkManager/system-connections", adapter.GetConfigDir())
+	assert.Equal(t, "/etc/sysconfig/network-scripts", adapter.GetConfigDir())
 }
 
-func TestRHELAdapter_generateNmConnectionContent(t *testing.T) {
+func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
 	tests := []struct {
 		name           string
 		iface          entities.NetworkInterface
@@ -575,7 +575,7 @@ func TestRHELAdapter_generateNmConnectionContent(t *testing.T) {
 				Return([]byte{}, assert.AnError).Maybe()
 
 			adapter := NewRHELAdapter(mockExecutor, mockFS, logger)
-			content := adapter.generateNmConnectionContent(tt.iface, tt.ifaceName, tt.actualDevice)
+			content := adapter.generateIfcfgContent(tt.iface, tt.ifaceName)
 
 			// Verify all expected fields are present
 			for _, field := range tt.expectedFields {

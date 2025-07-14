@@ -43,11 +43,10 @@ func NewRHELAdapter(
 }
 
 // GetConfigDir returns the directory path where configuration files are stored
-// RHEL/NetworkManager stores connection profiles in /etc/NetworkManager/system-connections/
+// RHEL uses traditional network-scripts directory for interface configuration
 func (a *RHELAdapter) GetConfigDir() string {
-	// Always use the directly mounted volume path
-	// This matches the Ubuntu approach where /etc/netplan is directly mounted
-	return "/etc/NetworkManager/system-connections"
+	// RHEL uses /etc/sysconfig/network-scripts/ for ifcfg files
+	return "/etc/sysconfig/network-scripts"
 }
 
 // execNmcli is a helper method to execute nmcli commands with nsenter if in container
@@ -62,7 +61,19 @@ func (a *RHELAdapter) execNmcli(ctx context.Context, args ...string) ([]byte, er
 	return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nmcli", args...)
 }
 
-// Configure configures network interface by directly modifying nmconnection file.
+// execCommand is a helper method to execute commands with nsenter if in container
+func (a *RHELAdapter) execCommand(ctx context.Context, command string, args ...string) ([]byte, error) {
+	if a.isContainer {
+		// In container environment, use nsenter to run in host namespace
+		cmdArgs := []string{"--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", command}
+		cmdArgs = append(cmdArgs, args...)
+		return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "nsenter", cmdArgs...)
+	}
+	// Direct execution on host
+	return a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, command, args...)
+}
+
+// Configure configures network interface by renaming device and creating ifcfg file.
 func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInterface, name entities.InterfaceName) error {
 	ifaceName := name.String()
 	macAddress := iface.MacAddress
@@ -70,7 +81,7 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
 		"mac":       macAddress,
-	}).Info("Starting RHEL interface configuration with direct file modification")
+	}).Info("Starting RHEL interface configuration with device rename approach")
 
 	// 1. Find the actual device name by MAC address
 	actualDevice, err := a.findDeviceByMAC(ctx, macAddress)
@@ -79,278 +90,120 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	}
 
 	a.logger.WithFields(logrus.Fields{
-		"connection_name": ifaceName,
+		"target_name":     ifaceName,
 		"actual_device":   actualDevice,
 		"mac":            macAddress,
 	}).Debug("Found actual device for MAC address")
 
-	// 2. Generate nmconnection file content
-	configPath := filepath.Join(a.GetConfigDir(), ifaceName+".nmconnection")
-	content := a.generateNmConnectionContent(iface, ifaceName, actualDevice)
+	// 2. Check if device name needs to be changed
+	if actualDevice != ifaceName {
+		a.logger.WithFields(logrus.Fields{
+			"from": actualDevice,
+			"to":   ifaceName,
+		}).Info("Renaming network interface")
+
+		// Bring interface down
+		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "down"); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to bring down interface %s", actualDevice), err)
+		}
+
+		// Rename interface
+		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err != nil {
+			// Try to bring it back up if rename fails
+			a.execCommand(ctx, "ip", "link", "set", actualDevice, "up")
+			return errors.NewNetworkError(fmt.Sprintf("Failed to rename interface %s to %s", actualDevice, ifaceName), err)
+		}
+
+		// Bring interface up with new name
+		if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "up"); err != nil {
+			return errors.NewNetworkError(fmt.Sprintf("Failed to bring up interface %s", ifaceName), err)
+		}
+
+		a.logger.WithField("interface", ifaceName).Info("Interface renamed successfully")
+	}
+
+	// 3. Generate ifcfg file content
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
+	content := a.generateIfcfgContent(iface, ifaceName)
 
 	a.logger.WithFields(logrus.Fields{
 		"interface":   ifaceName,
 		"config_path": configPath,
-		"actual_device": actualDevice,
 		"mac_address": iface.MacAddress,
-		"content_length": len(content),
-		"is_container": a.isContainer,
-	}).Info("About to write nmconnection file")
+	}).Info("About to write ifcfg file")
 	
 	// Log the full content in debug mode for troubleshooting
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
 		"content": content,
-	}).Debug("Full nmconnection file content")
+	}).Debug("Full ifcfg file content")
 
-	// 3. Write the configuration file directly
-	// With the volume mount, we can write directly like Ubuntu does
-	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0600); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("Failed to write nmconnection file: %s", configPath), err)
+	// 4. Write the configuration file
+	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0644); err != nil {
+		return errors.NewNetworkError(fmt.Sprintf("Failed to write ifcfg file: %s", configPath), err)
 	}
 
 	// Verify file was actually written
-	// With volume mount, we can check directly
 	if !a.fileSystem.Exists(configPath) {
-		return errors.NewNetworkError(fmt.Sprintf("nmconnection file was not created: %s", configPath), nil)
+		return errors.NewNetworkError(fmt.Sprintf("ifcfg file was not created: %s", configPath), nil)
 	}
 
-	// Verify file content
-	writtenContent, err := a.fileSystem.ReadFile(configPath)
-	if err != nil {
-		a.logger.WithError(err).WithField("config_path", configPath).Error("Failed to read back written file")
-		return errors.NewNetworkError(fmt.Sprintf("Failed to verify nmconnection file: %s", configPath), err)
-	}
-
-	if len(writtenContent) == 0 {
-		return errors.NewNetworkError(fmt.Sprintf("nmconnection file is empty: %s", configPath), nil)
-	}
-	
 	a.logger.WithFields(logrus.Fields{
 		"interface":   ifaceName,
 		"config_path": configPath,
-		"file_size":   len(writtenContent),
-		"file_exists": true,
-	}).Info("nmconnection file written and verified successfully")
+	}).Info("ifcfg file written successfully")
 
-
-	// 4. Reload NetworkManager to apply changes
-	if err := a.reloadNetworkManager(ctx); err != nil {
-		a.logger.WithError(err).Error("NetworkManager reload failed")
-		return errors.NewNetworkError("Failed to reload NetworkManager", err)
+	// 5. Restart NetworkManager to apply changes
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Error("NetworkManager restart failed")
+		return errors.NewNetworkError("Failed to restart NetworkManager", err)
 	}
 
-	a.logger.WithField("interface", ifaceName).Debug("NetworkManager reloaded successfully")
-
-	// 5. Force NetworkManager to recognize the new connection
-	// First, try using nmcli to import the connection explicitly
-	importOutput, importErr := a.execNmcli(ctx, "connection", "load", configPath)
-	if importErr != nil {
-		a.logger.WithError(importErr).WithFields(logrus.Fields{
-			"interface": ifaceName,
-			"output": string(importOutput),
-			"config_path": configPath,
-		}).Warn("Failed to explicitly load connection file")
-		
-		// If loading failed, try creating connection directly with nmcli as fallback
-		a.logger.WithField("interface", ifaceName).Info("Attempting to create connection directly with nmcli")
-		
-		// Delete the file first to avoid conflicts
-		_ = a.fileSystem.Remove(configPath)
-		
-		// Create connection with nmcli
-		createArgs := []string{"connection", "add", 
-			"type", "ethernet",
-			"con-name", ifaceName,
-			"ifname", actualDevice,
-			"802-3-ethernet.mac-address", strings.ToUpper(iface.MacAddress),
-		}
-		
-		// Add MTU if specified
-		if iface.MTU > 0 {
-			createArgs = append(createArgs, "802-3-ethernet.mtu", fmt.Sprintf("%d", iface.MTU))
-		}
-		
-		// Add IP configuration
-		if iface.Address != "" && iface.CIDR != "" {
-			parts := strings.Split(iface.CIDR, "/")
-			if len(parts) == 2 {
-				prefix := parts[1]
-				fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
-				createArgs = append(createArgs, "ipv4.method", "manual", "ipv4.addresses", fullAddress)
-			} else {
-				createArgs = append(createArgs, "ipv4.method", "disabled")
-			}
-		} else {
-			createArgs = append(createArgs, "ipv4.method", "disabled")
-		}
-		
-		// Disable IPv6
-		createArgs = append(createArgs, "ipv6.method", "disabled")
-		
-		createOutput, createErr := a.execNmcli(ctx, createArgs...)
-		if createErr != nil {
-			a.logger.WithError(createErr).WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"output": string(createOutput),
-			}).Error("Failed to create connection with nmcli")
-			return errors.NewNetworkError(fmt.Sprintf("Failed to create connection %s with nmcli", ifaceName), createErr)
-		}
-		
-		a.logger.WithFields(logrus.Fields{
-			"interface": ifaceName,
-			"output": string(createOutput),
-		}).Info("Connection created successfully with nmcli")
-		
-		// Skip file-based validation since we used nmcli
-		return nil
-	} else {
-		a.logger.WithFields(logrus.Fields{
-			"interface": ifaceName,
-			"output": string(importOutput),
-		}).Debug("Connection file explicitly loaded")
-	}
-
-	// 6. Wait for NetworkManager to discover the new connection file
-	// and then try to activate with retries
-	maxRetries := 5  // Increased from 3 to 5
-	retryDelay := 3 * time.Second  // Increased from 2 to 3 seconds
-	var lastErr error
+	a.logger.WithField("interface", ifaceName).Info("NetworkManager restarted successfully")
 	
-	for i := 0; i < maxRetries; i++ {
-		if i > 0 {
-			a.logger.WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"attempt":   i + 1,
-				"max_attempts": maxRetries,
-			}).Debug("Retrying connection activation after delay")
-			time.Sleep(retryDelay)
-			
-			// Force reload on retry
-			if i > 2 {
-				a.logger.WithField("interface", ifaceName).Debug("Forcing NetworkManager reload on retry")
-				_ = a.reloadNetworkManager(ctx)
-			}
-		}
-		
-		// Check if connection exists in NetworkManager
-		if err := a.validateConnectionExists(ctx, ifaceName); err != nil {
-			lastErr = err
-			a.logger.WithError(err).WithFields(logrus.Fields{
-				"interface": ifaceName,
-				"attempt":   i + 1,
-			}).Debug("Connection not yet visible to NetworkManager")
-			
-			// On later attempts, check if file still exists
-			if i > 1 && !a.fileSystem.Exists(configPath) {
-				a.logger.WithFields(logrus.Fields{
-					"interface": ifaceName,
-					"config_path": configPath,
-					"attempt": i + 1,
-				}).Error("Configuration file disappeared - NetworkManager may have rejected it")
-				
-				// Check if NetworkManager created a different file
-				configDir := a.GetConfigDir()
-				files, _ := a.fileSystem.ListFiles(configDir)
-				var relatedFiles []string
-				for _, f := range files {
-					if strings.Contains(f, ifaceName) || strings.Contains(f, actualDevice) {
-						relatedFiles = append(relatedFiles, f)
-					}
-				}
-				
-				if len(relatedFiles) > 0 {
-					a.logger.WithFields(logrus.Fields{
-						"interface": ifaceName,
-						"related_files": relatedFiles,
-						"config_dir": configDir,
-					}).Warn("NetworkManager may have created alternative connection files")
-				}
-				
-				return errors.NewNetworkError(fmt.Sprintf("Configuration file %s was removed by NetworkManager", configPath), nil)
-			}
-			continue
-		}
-		
-		// Try to activate the connection
-		if err := a.activateConnection(ctx, ifaceName); err != nil {
-			a.logger.WithError(err).Warn("Failed to activate connection, but continuing")
-			// Don't treat activation failure as fatal - connection exists
-		}
-		
-		// Connection exists and we attempted activation
-		a.logger.WithField("interface", ifaceName).Info("Connection successfully created and activation attempted")
-		return nil
-	}
-	
-	// After all retries, connection still not visible
-	a.logger.WithError(lastErr).Error("Connection not visible to NetworkManager after retries")
-	return errors.NewNetworkError(fmt.Sprintf("Connection %s not recognized by NetworkManager after %d retries", ifaceName, maxRetries), lastErr)
+	// Configuration complete
+	return nil
 }
 
-// Validate verifies that the configured interface is properly activated.
+// Validate verifies that the configured interface exists.
 func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName) error {
 	ifaceName := name.String()
-	a.logger.WithField("interface", ifaceName).Debug("Starting nmcli interface validation")
+	a.logger.WithField("interface", ifaceName).Debug("Starting interface validation")
 
-	// Check connection status using `nmcli connection show`
-	// In RHEL, the device name doesn't change, only the CONNECTION name is multinic0
-	output, err := a.execNmcli(ctx, "connection", "show", "--active")
+	// Check if interface exists using ip command
+	output, err := a.execCommand(ctx, "ip", "link", "show", ifaceName)
 	if err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection show execution failed: %s", ifaceName), err)
+		return errors.NewNetworkError(fmt.Sprintf("Interface %s not found", ifaceName), err)
 	}
 
-	// Check if our connection is active
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		// NAME UUID TYPE DEVICE format
-		if len(fields) >= 4 && fields[0] == ifaceName {
-			// Connection is active
-			a.logger.WithFields(logrus.Fields{
-				"connection": ifaceName,
-				"device":     fields[3],
-			}).Debug("nmcli connection validation successful - active")
-			return nil
-		}
+	// Check if ifcfg file exists
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
+	if !a.fileSystem.Exists(configPath) {
+		return errors.NewNetworkError(fmt.Sprintf("Configuration file %s not found", configPath), nil)
 	}
 
-	// If not found in active connections, it might have failed to activate
-	// Let's check all connections to see if it exists but is not active
-	allOutput, err := a.execNmcli(ctx, "connection", "show")
-	if err == nil {
-		for _, line := range strings.Split(string(allOutput), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) >= 1 && fields[0] == ifaceName {
-				a.logger.WithFields(logrus.Fields{
-					"connection": ifaceName,
-					"status": "exists_but_inactive",
-				}).Debug("Connection exists but is not active - this is acceptable")
-				// For RHEL, we accept connections that exist but are not active
-				// as the file was created successfully
-				return nil
-			}
-		}
-	}
-
-	return errors.NewNetworkError(fmt.Sprintf("Connection %s not found", ifaceName), nil)
+	a.logger.WithFields(logrus.Fields{
+		"interface": ifaceName,
+		"output":    string(output),
+	}).Debug("Interface validation successful")
+	
+	return nil
 }
 
-// Rollback removes interface configuration by deleting the nmconnection file.
+// Rollback removes interface configuration by deleting the ifcfg file.
 func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 	a.logger.WithField("interface", name).Info("Starting RHEL interface rollback/deletion")
 
 	// 1. Delete the configuration file
-	configPath := filepath.Join(a.GetConfigDir(), name+".nmconnection")
+	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+name)
 	
-	// With volume mount, we can remove directly
 	if err := a.fileSystem.Remove(configPath); err != nil {
-		a.logger.WithError(err).WithField("interface", name).Debug("Error removing nmconnection file (can be ignored)")
+		a.logger.WithError(err).WithField("interface", name).Debug("Error removing ifcfg file (can be ignored)")
 	}
 
-	// 2. Reload NetworkManager to apply the removal
-	if err := a.reloadNetworkManager(ctx); err != nil {
-		a.logger.WithError(err).Warn("NetworkManager reload failed during rollback")
+	// 2. Restart NetworkManager to apply the removal
+	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
+		a.logger.WithError(err).Warn("NetworkManager restart failed during rollback")
 	}
 
 	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
@@ -412,150 +265,36 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 	return "", fmt.Errorf("no ethernet device found with MAC address %s", macAddress)
 }
 
-// generateNmConnectionContent generates the nmconnection file content
-func (a *RHELAdapter) generateNmConnectionContent(iface entities.NetworkInterface, ifaceName, actualDevice string) string {
-	// Generate a proper UUID v4
-	b := make([]byte, 16)
-	// Use timestamp and MAC for uniqueness
-	t := time.Now().UnixNano()
-	for i := 0; i < 8; i++ {
-		b[i] = byte(t >> (8 * i))
-	}
-	for i, c := range iface.MacAddress {
-		if i < 8 {
-			b[8+i] = byte(c)
-		}
-	}
-	
-	// Set version (4) and variant bits
-	b[6] = (b[6] & 0x0f) | 0x40 // Version 4
-	b[8] = (b[8] & 0x3f) | 0x80 // Variant is 10
-	
-	uuid := fmt.Sprintf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15])
+// generateIfcfgContent generates the ifcfg file content
+func (a *RHELAdapter) generateIfcfgContent(iface entities.NetworkInterface, ifaceName string) string {
+	content := fmt.Sprintf(`DEVICE=%s
+NAME=%s
+TYPE=Ethernet
+ONBOOT=yes
+BOOTPROTO=none`, ifaceName, ifaceName)
 
-	content := fmt.Sprintf(`[connection]
-id=%s
-uuid=%s
-type=ethernet
-interface-name=%s
-
-[ethernet]
-mac-address=%s`, ifaceName, uuid, actualDevice, strings.ToUpper(iface.MacAddress))
-
-	// Add MTU if specified
-	if iface.MTU > 0 {
-		content += fmt.Sprintf("\nmtu=%d", iface.MTU)
-	}
-
-	// Add IPv4 configuration
-	content += "\n\n[ipv4]"
+	// Add IP configuration if available
 	if iface.Address != "" && iface.CIDR != "" {
 		// Extract prefix from CIDR
 		parts := strings.Split(iface.CIDR, "/")
 		if len(parts) == 2 {
 			prefix := parts[1]
-			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
-			content += fmt.Sprintf("\nmethod=manual\naddress1=%s", fullAddress)
-		} else {
-			content += "\nmethod=disabled"
+			content += fmt.Sprintf("\nIPADDR=%s\nPREFIX=%s", iface.Address, prefix)
 		}
-	} else {
-		content += "\nmethod=disabled"
 	}
 
-	// Always disable IPv6
-	content += "\n\n[ipv6]\naddr-gen-mode=default\nmethod=disabled\n\n[proxy]\n"
+	// Add MTU if specified
+	if iface.MTU > 0 {
+		content += fmt.Sprintf("\nMTU=%d", iface.MTU)
+	}
+
+	// Always add MAC address
+	content += fmt.Sprintf("\nHWADDR=%s", strings.ToLower(iface.MacAddress))
 
 	return content
 }
 
-// activateConnection tries to activate the connection
-func (a *RHELAdapter) activateConnection(ctx context.Context, connectionName string) error {
-	output, err := a.execNmcli(ctx, "connection", "up", connectionName)
-	if err != nil {
-		a.logger.WithError(err).WithFields(logrus.Fields{
-			"connection": connectionName,
-			"output":     string(output),
-		}).Debug("Failed to activate connection")
-		return err
-	}
-	
-	a.logger.WithFields(logrus.Fields{
-		"connection": connectionName,
-		"output":     string(output),
-	}).Debug("Connection activated successfully")
-	return nil
-}
-
-// validateConnectionExists checks if the connection exists (active or inactive)
-func (a *RHELAdapter) validateConnectionExists(ctx context.Context, connectionName string) error {
-	// Check if connection exists in any state (active or inactive)
-	allOutput, err := a.execNmcli(ctx, "connection", "show")
-	if err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("nmcli connection show execution failed: %s", connectionName), err)
-	}
-
-	// Check if our connection exists
-	lines := strings.Split(string(allOutput), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 1 && fields[0] == connectionName {
-			a.logger.WithFields(logrus.Fields{
-				"connection": connectionName,
-				"status":     "exists",
-			}).Debug("Connection found in nmcli")
-			return nil
-		}
-	}
-
-	return errors.NewNetworkError(fmt.Sprintf("Connection %s not found", connectionName), nil)
-}
-
-// Helper function for min
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// GenerateNmConnectionContentForTest is a test helper method
-func (a *RHELAdapter) GenerateNmConnectionContentForTest(iface entities.NetworkInterface, ifaceName, actualDevice string) string {
-	return a.generateNmConnectionContent(iface, ifaceName, actualDevice)
-}
-
-// reloadNetworkManager reloads NetworkManager to apply configuration changes
-func (a *RHELAdapter) reloadNetworkManager(ctx context.Context) error {
-	// Try nmcli connection reload first (faster)
-	if output, err := a.execNmcli(ctx, "connection", "reload"); err == nil {
-		a.logger.WithField("output", string(output)).Debug("NetworkManager connections reloaded successfully")
-		return nil
-	} else {
-		a.logger.WithError(err).Debug("nmcli connection reload failed, trying systemctl")
-	}
-
-	// Fallback to systemctl reload (slower but more reliable)
-	if a.isContainer {
-		// In container, use nsenter to reload on host
-		output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, 
-			"nsenter", "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", 
-			"systemctl", "reload", "NetworkManager")
-		if err != nil {
-			a.logger.WithError(err).WithField("output", string(output)).Error("systemctl reload NetworkManager failed in container")
-			return err
-		}
-		a.logger.WithField("output", string(output)).Debug("NetworkManager reloaded via systemctl in container")
-		return nil
-	}
-	
-	// Direct execution on host
-	output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 30*time.Second, "systemctl", "reload", "NetworkManager")
-	if err != nil {
-		a.logger.WithError(err).WithField("output", string(output)).Error("systemctl reload NetworkManager failed")
-		return err
-	}
-	a.logger.WithField("output", string(output)).Debug("NetworkManager reloaded via systemctl")
-	return nil
+// GenerateIfcfgContentForTest is a test helper method
+func (a *RHELAdapter) GenerateIfcfgContentForTest(iface entities.NetworkInterface, ifaceName string) string {
+	return a.generateIfcfgContent(iface, ifaceName)
 }

@@ -50,36 +50,25 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
 					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
 				
-				// File write operation (NEW)
-				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
+				// Rename device operations
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "name", "multinic0").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "up").
+					Return([]byte(""), nil).Once()
+				
+				// File write operation
+				fs.On("WriteFile", "/etc/sysconfig/network-scripts/ifcfg-multinic0", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
 					Return(nil).Once()
 				
 				// Verify file exists after write
-				fs.On("Exists", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+				fs.On("Exists", "/etc/sysconfig/network-scripts/ifcfg-multinic0").
 					Return(true).Once()
 				
-				// Read file back for verification
-				fs.On("ReadFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
-					Return([]byte("[connection]\ntest content"), nil).Once()
-				
-				// Reload NetworkManager
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
+				// Restart NetworkManager
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "systemctl", "restart", "NetworkManager").
 					Return([]byte(""), nil).Once()
-				
-				// Try to explicitly load the connection
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "load", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
-					Return([]byte(""), nil).Once()
-				
-				// First validation attempt - connection exists
-				validationOutput := `NAME      UUID                                  TYPE      DEVICE
-multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
-eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
-					Return([]byte(validationOutput), nil).Once()
-				
-				// Try to activate connection
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "up", "multinic0").
-					Return([]byte("Connection successfully activated"), nil).Once()
 			},
 			wantErr: false,
 		},
@@ -109,15 +98,23 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
 					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
 				
-				// File write succeeds first
-				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
+				// Rename operations succeed
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "name", "multinic0").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "up").
+					Return([]byte(""), nil).Once()
+				
+				// File write fails
+				fs.On("WriteFile", "/etc/sysconfig/network-scripts/ifcfg-multinic0", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
 					Return(errors.New("permission denied")).Once()
 			},
 			wantErr:   true,
 			errorType: &multinicErrors.DomainError{Type: multinicErrors.ErrorTypeNetwork},
 		},
 		{
-			name: "NetworkManager reload 실패",
+			name: "NetworkManager restart 실패",
 			iface: entities.NetworkInterface{
 				MacAddress: "fa:16:3e:00:be:63",
 			},
@@ -139,23 +136,24 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "-g", "GENERAL.HWADDR", "device", "show", "eth1").
 					Return([]byte("fa:16:3e:00:be:63\n"), nil).Once()
 				
+				// Rename operations succeed
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "down").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth1", "name", "multinic0").
+					Return([]byte(""), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "up").
+					Return([]byte(""), nil).Once()
+				
 				// File write succeeds
-				fs.On("WriteFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
+				fs.On("WriteFile", "/etc/sysconfig/network-scripts/ifcfg-multinic0", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
 					Return(nil).Once()
 				
 				// Verify file exists after write
-				fs.On("Exists", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+				fs.On("Exists", "/etc/sysconfig/network-scripts/ifcfg-multinic0").
 					Return(true).Once()
 				
-				// Read file back for verification
-				fs.On("ReadFile", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
-					Return([]byte("[connection]\ntest content"), nil).Once()
-				
-				// Reload fails
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
-					Return([]byte(""), errors.New("reload failed")).Once()
-				// Fallback to systemctl also fails
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "systemctl", "reload", "NetworkManager").
+				// Restart fails
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "systemctl", "restart", "NetworkManager").
 					Return([]byte(""), errors.New("systemctl failed")).Once()
 			},
 			wantErr:   true,
@@ -188,41 +186,42 @@ lo         loopback  unmanaged  --`
 	}
 }
 
-func TestRHELAdapter_ValidateConnectionExists(t *testing.T) {
+func TestRHELAdapter_Validate(t *testing.T) {
 	tests := []struct {
 		name          string
-		connectionName string
-		setupMocks    func(*MockCommandExecutor)
+		interfaceName entities.InterfaceName
+		setupMocks    func(*MockCommandExecutor, *MockFileSystem)
 		wantErr       bool
 	}{
 		{
-			name:           "연결이 존재함",
-			connectionName: "multinic0",
-			setupMocks: func(m *MockCommandExecutor) {
-				// Container check for adapter initialization - now always returns false
+			name:           "인터페이스가 존재함",
+			interfaceName: mustCreateInterfaceName("multinic0"),
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				output := `NAME      UUID                                  TYPE      DEVICE
-multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
-eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
-					Return([]byte(output), nil).Once()
+				// Interface exists
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show", "multinic0").
+					Return([]byte("3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500"), nil).Once()
+				
+				// Config file exists
+				fs.On("Exists", "/etc/sysconfig/network-scripts/ifcfg-multinic0").
+					Return(true).Once()
 			},
 			wantErr: false,
 		},
 		{
-			name:           "연결이 존재하지 않음",
-			connectionName: "multinic0",
-			setupMocks: func(m *MockCommandExecutor) {
-				// Container check for adapter initialization - now always returns false
+			name:           "인터페이스가 존재하지 않음",
+			interfaceName: mustCreateInterfaceName("multinic0"),
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
 				
-				output := `NAME      UUID                                  TYPE      DEVICE
-eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
-					Return([]byte(output), nil).Once()
+				// Interface doesn't exist
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show", "multinic0").
+					Return([]byte(""), errors.New("Device \"multinic0\" does not exist")).Once()
 			},
 			wantErr: true,
 		},
@@ -232,11 +231,11 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 		t.Run(tt.name, func(t *testing.T) {
 			mockExecutor := new(MockCommandExecutor)
 			mockFS := new(MockFileSystem)
-			tt.setupMocks(mockExecutor)
+			tt.setupMocks(mockExecutor, mockFS)
 
 			adapter := NewRHELAdapter(mockExecutor, mockFS, logrus.New())
 			
-			err := adapter.validateConnectionExists(context.Background(), tt.connectionName)
+			err := adapter.Validate(context.Background(), tt.interfaceName)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -245,6 +244,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 			}
 
 			mockExecutor.AssertExpectations(t)
+			mockFS.AssertExpectations(t)
 		})
 	}
 }
