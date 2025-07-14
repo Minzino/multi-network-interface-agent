@@ -110,23 +110,46 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 
 	a.logger.WithField("interface", ifaceName).Debug("NetworkManager reloaded successfully")
 
-	// 5. Try to activate the connection
-	if err := a.activateConnection(ctx, ifaceName); err != nil {
-		a.logger.WithError(err).Warn("Failed to activate connection, but continuing")
-	}
-
-	// 6. Give NetworkManager time to process
-	time.Sleep(3 * time.Second)
+	// 5. Wait for NetworkManager to discover the new connection file
+	// and then try to activate with retries
+	maxRetries := 3
+	retryDelay := 2 * time.Second
+	var lastErr error
 	
-	// 7. Verify the connection is working (with relaxed validation)
-	if err := a.validateConnectionExists(ctx, ifaceName); err != nil {
-		a.logger.WithError(err).Error("Connection validation failed after configuration")
-		// Don't rollback immediately - the file might be correct but activation pending
-		return errors.NewNetworkError(fmt.Sprintf("Connection validation failed after configuration: %s", ifaceName), err)
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			a.logger.WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"attempt":   i + 1,
+				"max_attempts": maxRetries,
+			}).Debug("Retrying connection activation after delay")
+			time.Sleep(retryDelay)
+		}
+		
+		// Check if connection exists in NetworkManager
+		if err := a.validateConnectionExists(ctx, ifaceName); err != nil {
+			lastErr = err
+			a.logger.WithError(err).WithFields(logrus.Fields{
+				"interface": ifaceName,
+				"attempt":   i + 1,
+			}).Debug("Connection not yet visible to NetworkManager")
+			continue
+		}
+		
+		// Try to activate the connection
+		if err := a.activateConnection(ctx, ifaceName); err != nil {
+			a.logger.WithError(err).Warn("Failed to activate connection, but continuing")
+			// Don't treat activation failure as fatal - connection exists
+		}
+		
+		// Connection exists and we attempted activation
+		a.logger.WithField("interface", ifaceName).Info("Connection successfully created and activation attempted")
+		return nil
 	}
-
-	a.logger.WithField("interface", ifaceName).Info("RHEL interface configuration completed")
-	return nil
+	
+	// After all retries, connection still not visible
+	a.logger.WithError(lastErr).Error("Connection not visible to NetworkManager after retries")
+	return errors.NewNetworkError(fmt.Sprintf("Connection %s not recognized by NetworkManager after %d retries", ifaceName, maxRetries), lastErr)
 }
 
 // Validate verifies that the configured interface is properly activated.

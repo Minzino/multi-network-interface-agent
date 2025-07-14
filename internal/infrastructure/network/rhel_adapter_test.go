@@ -82,7 +82,10 @@ func (m *MockFileSystem) ListFiles(path string) ([]string, error) {
 	return args.Get(0).([]string), args.Error(1)
 }
 
-func TestRHELAdapter_Configure(t *testing.T) {
+// TestRHELAdapter_Configure is moved to rhel_adapter_new_test.go
+
+func TestRHELAdapter_Configure_OLD_DISABLED(t *testing.T) {
+	t.Skip("Old nmcli-based tests - replaced by file-based tests in rhel_adapter_new_test.go")
 	tests := []struct {
 		name          string
 		iface         entities.NetworkInterface
@@ -372,7 +375,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 			wantErr: false,
 		},
 		{
-			name: "인터페이스가 disconnected 상태",
+			name: "인터페이스가 disconnected 상태 (exists but inactive - now considered valid)",
 			setupMocks: func(m *MockCommandExecutor) {
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
@@ -389,7 +392,7 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
 					Return([]byte(allOutput), nil).Once()
 			},
-			wantErr: true,
+			wantErr: false, // Changed to false - inactive connections are now considered valid
 		},
 		{
 			name: "인터페이스가 목록에 없음",
@@ -447,32 +450,36 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 func TestRHELAdapter_Rollback(t *testing.T) {
 	tests := []struct {
 		name       string
-		setupMocks func(*MockCommandExecutor)
+		setupMocks func(*MockCommandExecutor, *MockFileSystem)
 		wantErr    bool
 	}{
 		{
-			name: "성공적인 롤백",
-			setupMocks: func(m *MockCommandExecutor) {
+			name: "성공적인 롤백 (파일 삭제)",
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
-					Return([]byte("Connection successfully deactivated"), nil).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
-					Return([]byte("Connection successfully deleted"), nil).Once()
+				// File removal
+				fs.On("Remove", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return(nil).Once()
+				// NetworkManager reload
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
+					Return([]byte(""), nil).Once()
 			},
 			wantErr: false,
 		},
 		{
-			name: "connection이 이미 없는 경우도 성공",
-			setupMocks: func(m *MockCommandExecutor) {
+			name: "파일이 이미 없는 경우도 성공",
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
 				// Container check for adapter initialization
 				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 					Return([]byte(""), errors.New("not found")).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "down", "multinic0").
-					Return([]byte(""), errors.New("no such connection")).Once()
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "delete", "multinic0").
-					Return([]byte(""), errors.New("no such connection")).Once()
+				// File removal fails (already removed)
+				fs.On("Remove", "/etc/NetworkManager/system-connections/multinic0.nmconnection").
+					Return(errors.New("no such file")).Once()
+				// NetworkManager reload still happens
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
+					Return([]byte(""), nil).Once()
 			},
 			wantErr: false,
 		},
@@ -481,9 +488,10 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockExecutor := new(MockCommandExecutor)
-			tt.setupMocks(mockExecutor)
+			mockFS := new(MockFileSystem)
+			tt.setupMocks(mockExecutor, mockFS)
 
-			adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
+			adapter := NewRHELAdapter(mockExecutor, mockFS, logrus.New())
 			err := adapter.Rollback(context.Background(), "multinic0")
 
 			if tt.wantErr {
@@ -493,6 +501,7 @@ func TestRHELAdapter_Rollback(t *testing.T) {
 			}
 
 			mockExecutor.AssertExpectations(t)
+			mockFS.AssertExpectations(t)
 		})
 	}
 }

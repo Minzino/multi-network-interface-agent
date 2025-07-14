@@ -58,16 +58,16 @@ lo         loopback  unmanaged  --`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "reload").
 					Return([]byte(""), nil).Once()
 				
-				// Try to activate connection
-				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "up", "multinic0").
-					Return([]byte("Connection successfully activated"), nil).Once()
-				
-				// Validate connection exists (any state)
+				// First validation attempt - connection exists
 				validationOutput := `NAME      UUID                                  TYPE      DEVICE
 multinic0 12345678-1234-1234-1234-123456789012  ethernet  eth1
 eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "show").
 					Return([]byte(validationOutput), nil).Once()
+				
+				// Try to activate connection
+				m.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "nmcli", "connection", "up", "multinic0").
+					Return([]byte("Connection successfully activated"), nil).Once()
 			},
 			wantErr: false,
 		},
