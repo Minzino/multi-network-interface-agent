@@ -193,6 +193,30 @@ GET http://localhost:8080/
 }
 ```
 
+### Prometheus 메트릭
+
+에이전트는 `/metrics` 엔드포인트에서 Prometheus 메트릭을 제공합니다:
+
+```bash
+GET http://localhost:8080/metrics
+```
+
+주요 메트릭:
+
+| 메트릭 이름 | 타입 | 설명 | 레이블 |
+|------------|------|------|--------|
+| `multinic_interfaces_processed_total` | Counter | 처리된 인터페이스 총 개수 | `status` (success/failed) |
+| `multinic_interface_processing_duration_seconds` | Histogram | 인터페이스 처리 소요 시간 | `interface_name`, `status` |
+| `multinic_polling_cycles_total` | Counter | 실행된 폴링 사이클 총 개수 | - |
+| `multinic_polling_cycle_duration_seconds` | Histogram | 폴링 사이클 소요 시간 | - |
+| `multinic_polling_backoff_level` | Gauge | 현재 백오프 레벨 (0=정상) | - |
+| `multinic_db_connection_status` | Gauge | DB 연결 상태 (1=연결, 0=끊김) | - |
+| `multinic_concurrent_tasks` | Gauge | 동시 처리 중인 작업 수 | - |
+| `multinic_configuration_drifts_total` | Counter | 감지된 설정 드리프트 | `drift_type` |
+| `multinic_orphaned_interfaces_deleted_total` | Counter | 삭제된 고아 인터페이스 수 | - |
+| `multinic_errors_total` | Counter | 발생한 에러 총 개수 | `error_type` |
+| `multinic_agent_info` | Gauge | 에이전트 정보 | `version`, `os_type`, `node_name` |
+
 ### 로그 형식
 
 JSON 구조화 로깅 사용:

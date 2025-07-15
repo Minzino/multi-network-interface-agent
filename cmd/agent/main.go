@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -9,10 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"multinic-agent/internal/application/polling"
 	"multinic-agent/internal/application/usecases"
+	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/infrastructure/config"
 	"multinic-agent/internal/infrastructure/container"
+	"multinic-agent/internal/infrastructure/metrics"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 )
 
@@ -67,6 +72,7 @@ type Application struct {
 	configureUseCase *usecases.ConfigureNetworkUseCase
 	deleteUseCase    *usecases.DeleteNetworkUseCase
 	healthServer     *http.Server
+	osType           interfaces.OSType
 }
 
 // NewApplication은 새로운 Application을 생성합니다
@@ -83,6 +89,19 @@ func NewApplication(container *container.Container, logger *logrus.Logger) *Appl
 func (a *Application) Run() error {
 	cfg := a.container.GetConfig()
 
+	// OS 타입 감지 및 Info 로그 출력
+	osDetector := a.container.GetOSDetector()
+	osType, err := osDetector.DetectOS()
+	if err != nil {
+		return fmt.Errorf("failed to detect OS type: %w", err)
+	}
+	a.osType = osType
+	a.logger.WithField("os_type", osType).Info("Operating system detected")
+	
+	// 에이전트 정보 메트릭 설정
+	hostname, _ := os.Hostname()
+	metrics.SetAgentInfo("0.5.0", string(osType), hostname)
+
 	// 헬스체크 서버 시작
 	if err := a.startHealthServer(cfg.Health.Port); err != nil {
 		return err
@@ -95,44 +114,70 @@ func (a *Application) Run() error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 메인 루프 시작
-	ticker := time.NewTicker(cfg.Agent.PollInterval)
-	defer ticker.Stop()
+	// 폴링 전략 설정
+	var strategy polling.Strategy
+	if cfg.Agent.Backoff.Enabled {
+		// 지수 백오프 전략 사용
+		strategy = polling.NewExponentialBackoffStrategy(
+			cfg.Agent.PollInterval,         // 기본 간격
+			cfg.Agent.Backoff.MaxInterval,  // 최대 간격
+			cfg.Agent.Backoff.Multiplier,   // 지수 계수
+			a.logger,
+		)
+		a.logger.WithFields(logrus.Fields{
+			"base_interval": cfg.Agent.PollInterval,
+			"max_interval":  cfg.Agent.Backoff.MaxInterval,
+			"multiplier":    cfg.Agent.Backoff.Multiplier,
+		}).Info("Exponential backoff polling enabled")
+	} else {
+		// 고정 간격 폴링 (기존 방식)
+		strategy = &fixedIntervalStrategy{interval: cfg.Agent.PollInterval}
+		a.logger.WithField("interval", cfg.Agent.PollInterval).Info("Fixed interval polling enabled")
+	}
+	
+	// 폴링 컨트롤러 생성
+	pollingController := polling.NewPollingController(strategy, a.logger)
 
 	a.logger.Info("MultiNIC agent started")
 
-	for {
-		select {
-		case <-ctx.Done():
-			a.logger.Info("Agent shutting down")
-			return a.shutdown()
+	// 시그널 처리를 위한 goroutine
+	go func() {
+		<-sigChan
+		a.logger.Info("Received shutdown signal")
+		cancel()
+	}()
 
-		case <-sigChan:
-			a.logger.Info("Received shutdown signal")
-			cancel()
-
-		case <-ticker.C:
-			if err := a.processNetworkConfigurations(ctx); err != nil {
-				a.logger.WithError(err).Error("Failed to process network configurations")
-				a.container.GetHealthService().UpdateDBHealth(false, err)
-			} else {
-				a.container.GetHealthService().UpdateDBHealth(true, nil)
-			}
+	// 폴링 시작
+	return pollingController.Start(ctx, func(ctx context.Context) error {
+		err := a.processNetworkConfigurations(ctx)
+		if err != nil {
+			a.logger.WithError(err).Error("Failed to process network configurations")
+			a.container.GetHealthService().UpdateDBHealth(false, err)
+			metrics.SetDBConnectionStatus(false)
+			return err
 		}
-	}
+		a.container.GetHealthService().UpdateDBHealth(true, nil)
+		metrics.SetDBConnectionStatus(true)
+		return nil
+	})
 }
 
 // startHealthServer는 헬스체크 서버를 시작합니다
 func (a *Application) startHealthServer(port string) error {
 	healthService := a.container.GetHealthService()
 
+	// HTTP 핸들러 설정
+	mux := http.NewServeMux()
+	mux.Handle("/", healthService)
+	mux.Handle("/metrics", promhttp.Handler())
+
 	a.healthServer = &http.Server{
 		Addr:    ":" + port,
-		Handler: healthService,
+		Handler: mux,
 	}
 
 	go func() {
-		a.logger.WithField("port", port).Info("Health check server started")
+		a.logger.WithField("port", port).Info("Health check server started (with /metrics)")
 		if err := a.healthServer.ListenAndServe(); err != http.ErrServerClosed {
 			a.logger.WithError(err).Error("Health check server failed")
 		}
@@ -143,6 +188,8 @@ func (a *Application) startHealthServer(port string) error {
 
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
 func (a *Application) processNetworkConfigurations(ctx context.Context) error {
+	startTime := time.Now()
+	
 	// 호스트네임 가져오기
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -222,6 +269,9 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		}
 	}
 
+	// 폴링 사이클 메트릭 기록
+	metrics.RecordPollingCycle(time.Since(startTime).Seconds())
+	
 	return nil
 }
 
@@ -238,4 +288,17 @@ func (a *Application) shutdown() error {
 	}
 
 	return nil
+}
+
+// fixedIntervalStrategy는 고정 간격 폴링 전략입니다
+type fixedIntervalStrategy struct {
+	interval time.Duration
+}
+
+func (s *fixedIntervalStrategy) NextInterval(success bool) time.Duration {
+	return s.interval
+}
+
+func (s *fixedIntervalStrategy) Reset() {
+	// 고정 간격이므로 리셋할 것이 없음
 }

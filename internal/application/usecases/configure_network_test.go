@@ -440,6 +440,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				mockFS,
 				mockOSDetector,
 				logger,
+				5, // maxConcurrentTasks
 			)
 
 			// 실행
@@ -523,6 +524,7 @@ func TestConfigureNetworkUseCase_processInterface(t *testing.T) {
 				mockFS,
 				mockOSDetector,
 				logger,
+				5, // maxConcurrentTasks
 			)
 
 			// processInterface 메서드 테스트
