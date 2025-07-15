@@ -243,7 +243,6 @@ multinic-agent/
 │   ├── domain/         # 비즈니스 로직
 │   ├── application/    # 유스케이스
 │   ├── infrastructure/ # 외부 시스템 연동
-│   └── interfaces/     # HTTP/CLI 인터페이스
 ├── deployments/        # 배포 설정
 │   └── helm/          # Helm 차트
 └── scripts/           # 유틸리티 스크립트

@@ -67,9 +67,6 @@ multinic-agent/
 |   |   ├── network/    # 네트워크 관리 구현
 |   |   ├── health/     # 헬스체크 구현
 |   |   └── config/     # 설정 관리
-|   └── interfaces/     # 인터페이스 어댑터
-|       ├── http/       # HTTP 핸들러
-|       └── cli/        # CLI 인터페이스
 ├── pkg/                # 기존 패키지 (마이그레이션 예정)
 |   ├── db/             # 데이터베이스 연동
 |   ├── health/         # 헬스체크 시스템
@@ -516,7 +513,6 @@ multinic-agent/
 |   ├── domain/              # 도메인 계층
 |   ├── application/         # 애플리케이션 계층  
 |   ├── infrastructure/      # 인프라스트럭처 계층
-|   └── interfaces/          # 인터페이스 어댑터
 ├── deployments/helm/        # Helm 차트
 └── scripts/                 # 배포 스크립트
 ```
