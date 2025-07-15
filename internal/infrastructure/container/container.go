@@ -180,6 +180,11 @@ func (c *Container) GetDeleteNetworkUseCase() *usecases.DeleteNetworkUseCase {
 	return c.deleteNetworkUseCase
 }
 
+// GetOSDetector는 OS 감지기를 반환합니다
+func (c *Container) GetOSDetector() interfaces.OSDetector {
+	return c.osDetector
+}
+
 // Close는 컨테이너를 정리합니다
 func (c *Container) Close() error {
 	if c.db != nil {

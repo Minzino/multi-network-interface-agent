@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"multinic-agent/internal/application/usecases"
+	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/infrastructure/config"
 	"multinic-agent/internal/infrastructure/container"
 
@@ -67,6 +69,7 @@ type Application struct {
 	configureUseCase *usecases.ConfigureNetworkUseCase
 	deleteUseCase    *usecases.DeleteNetworkUseCase
 	healthServer     *http.Server
+	osType           interfaces.OSType
 }
 
 // NewApplication은 새로운 Application을 생성합니다
@@ -82,6 +85,15 @@ func NewApplication(container *container.Container, logger *logrus.Logger) *Appl
 // Run은 애플리케이션을 실행합니다
 func (a *Application) Run() error {
 	cfg := a.container.GetConfig()
+
+	// OS 타입 감지 및 Info 로그 출력
+	osDetector := a.container.GetOSDetector()
+	osType, err := osDetector.DetectOS()
+	if err != nil {
+		return fmt.Errorf("failed to detect OS type: %w", err)
+	}
+	a.osType = osType
+	a.logger.WithField("os_type", osType).Info("Operating system detected")
 
 	// 헬스체크 서버 시작
 	if err := a.startHealthServer(cfg.Health.Port); err != nil {

@@ -128,21 +128,13 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 	}).Info("Starting interface configuration")
 
 	// 2. 네트워크 설정 적용
-	if err := uc.configurer.Configure(ctx, iface, interfaceName); err != nil {
-		// 롤백 시도
-		if rollbackErr := uc.rollbacker.Rollback(ctx, interfaceName.String()); rollbackErr != nil {
-			uc.logger.WithError(rollbackErr).Error("Rollback failed")
-		}
-		return errors.NewNetworkError("Failed to apply network configuration", err)
+	if err := uc.applyConfiguration(ctx, iface, interfaceName); err != nil {
+		return err
 	}
 
 	// 3. 설정 검증
-	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
-		// 검증 실패 시 롤백
-		if rollbackErr := uc.rollbacker.Rollback(ctx, interfaceName.String()); rollbackErr != nil {
-			uc.logger.WithError(rollbackErr).Error("Rollback failed")
-		}
-		return errors.NewNetworkError("Network configuration validation failed", err)
+	if err := uc.validateConfiguration(ctx, interfaceName); err != nil {
+		return err
 	}
 
 	// 4. 성공 상태로 업데이트
@@ -155,6 +147,56 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 		"interface_name": interfaceName.String(),
 	}).Info("Interface configuration succeeded")
 
+	return nil
+}
+
+// applyConfiguration은 네트워크 설정을 적용하고 실패 시 롤백합니다
+func (uc *ConfigureNetworkUseCase) applyConfiguration(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
+	if err := uc.configurer.Configure(ctx, iface, interfaceName); err != nil {
+		// 롤백 시도
+		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "configuration"); rollbackErr != nil {
+			// 롤백도 실패한 경우 더 심각한 상황
+			return errors.NewNetworkError(
+				fmt.Sprintf("Failed to apply configuration and rollback also failed: %v", rollbackErr),
+				err,
+			)
+		}
+		return errors.NewNetworkError("Failed to apply network configuration", err)
+	}
+	return nil
+}
+
+// validateConfiguration은 네트워크 설정을 검증하고 실패 시 롤백합니다
+func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, interfaceName entities.InterfaceName) error {
+	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
+		// 검증 실패 시 롤백
+		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+			return errors.NewNetworkError(
+				fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
+				err,
+			)
+		}
+		return errors.NewNetworkError("Network configuration validation failed", err)
+	}
+	return nil
+}
+
+// performRollback은 롤백을 수행하고 결과를 기록합니다
+func (uc *ConfigureNetworkUseCase) performRollback(ctx context.Context, interfaceName string, stage string) error {
+	err := uc.rollbacker.Rollback(ctx, interfaceName)
+	if err != nil {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"stage":          stage,
+			"error":          err,
+		}).Error("Rollback failed")
+		return err
+	}
+	
+	uc.logger.WithFields(logrus.Fields{
+		"interface_name": interfaceName,
+		"stage":          stage,
+	}).Info("Rollback completed successfully")
 	return nil
 }
 
@@ -398,7 +440,7 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
 	if err != nil {
-		uc.logger.WithError(err).WithField("mac_address", iface.MacAddress).Error("Failed to generate interface name")
+		uc.handleInterfaceError("interface name generation", iface.ID, iface.MacAddress, err)
 		*failedCount++
 		return nil // 다음 인터페이스 처리를 위해 에러 반환하지 않음
 	}
@@ -417,17 +459,8 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 		}).Debug("Processing interface")
 		
 		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
-			uc.logger.WithFields(logrus.Fields{
-				"interface_id":   iface.ID,
-				"interface_name": interfaceName.String(),
-				"error":          err,
-			}).Error("Failed to configure/sync interface")
+			uc.handleProcessingError(ctx, iface, interfaceName, err)
 			*failedCount++
-
-			// 실패 상태로 업데이트
-			if updateErr := uc.repository.UpdateInterfaceStatus(ctx, iface.ID, entities.StatusFailed); updateErr != nil {
-				uc.logger.WithError(updateErr).Error("Failed to update interface status")
-			}
 		} else {
 			*processedCount++
 		}
@@ -494,6 +527,59 @@ func (uc *ConfigureNetworkUseCase) logDriftDetails(configType string, dbIface en
 	}
 	
 	uc.logger.WithFields(fields).Debug(configType + " configuration drift detected")
+}
+
+// handleInterfaceError는 인터페이스 처리 에러를 기록합니다
+func (uc *ConfigureNetworkUseCase) handleInterfaceError(operation string, interfaceID int, macAddress string, err error) {
+	fields := logrus.Fields{
+		"operation":    operation,
+		"interface_id": interfaceID,
+		"mac_address":  macAddress,
+		"error":        err,
+	}
+	
+	// 에러 타입에 따른 로그 레벨 조정
+	switch {
+	case errors.IsValidationError(err):
+		uc.logger.WithFields(fields).Warn("Validation error")
+	case errors.IsNetworkError(err):
+		uc.logger.WithFields(fields).Error("Network error")
+	case errors.IsTimeoutError(err):
+		uc.logger.WithFields(fields).Error("Timeout error")
+	default:
+		uc.logger.WithFields(fields).Error("Operation failed")
+	}
+}
+
+// handleProcessingError는 인터페이스 처리 중 발생한 에러를 처리합니다
+func (uc *ConfigureNetworkUseCase) handleProcessingError(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName, err error) {
+	uc.logger.WithFields(logrus.Fields{
+		"interface_id":   iface.ID,
+		"interface_name": interfaceName.String(),
+		"error_type":     uc.getErrorType(err),
+		"error":          err,
+	}).Error("Failed to configure/sync interface")
+
+	// 실패 상태로 업데이트
+	if updateErr := uc.repository.UpdateInterfaceStatus(ctx, iface.ID, entities.StatusFailed); updateErr != nil {
+		uc.logger.WithError(updateErr).Error("Failed to update interface status")
+	}
+}
+
+// getErrorType는 에러 타입을 반환합니다
+func (uc *ConfigureNetworkUseCase) getErrorType(err error) string {
+	switch {
+	case errors.IsValidationError(err):
+		return "validation"
+	case errors.IsNetworkError(err):
+		return "network"
+	case errors.IsTimeoutError(err):
+		return "timeout"
+	case errors.IsSystemError(err):
+		return "system"
+	default:
+		return "unknown"
+	}
 }
 
 func extractInterfaceIndex(name string) int {
