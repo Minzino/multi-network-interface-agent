@@ -7,6 +7,8 @@ import (
 	"multinic-agent/internal/domain/entities"
 	"multinic-agent/internal/domain/errors"
 	"multinic-agent/internal/domain/interfaces"
+	"multinic-agent/internal/infrastructure/metrics"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/sirupsen/logrus"
@@ -28,6 +30,11 @@ func NewMySQLRepository(db *sql.DB, logger *logrus.Logger) interfaces.NetworkInt
 
 // GetPendingInterfaces retrieves interfaces pending configuration for a specific node
 func (r *MySQLRepository) GetPendingInterfaces(ctx context.Context, nodeName string) ([]entities.NetworkInterface, error) {
+	startTime := time.Now()
+	defer func() {
+		metrics.RecordDBQuery("get_pending", time.Since(startTime).Seconds())
+	}()
+	
 	query := `
 		SELECT mi.id, mi.macaddress, mi.attached_node_name, mi.netplan_success, mi.address, mi.mtu, ms.cidr
 		FROM multi_interface mi
@@ -40,6 +47,7 @@ func (r *MySQLRepository) GetPendingInterfaces(ctx context.Context, nodeName str
 
 	rows, err := r.db.QueryContext(ctx, query, nodeName)
 	if err != nil {
+		metrics.RecordError("system")
 		return nil, errors.NewSystemError("database query failed", err)
 	}
 	defer rows.Close()

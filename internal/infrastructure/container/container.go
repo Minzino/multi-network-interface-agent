@@ -139,6 +139,7 @@ func (c *Container) initializeUseCases() error {
 		c.fileSystem,
 		c.osDetector,
 		c.logger,
+		c.config.Agent.MaxConcurrentTasks,
 	)
 
 	// 네트워크 삭제 유스케이스

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/domain/services"
+	"multinic-agent/internal/infrastructure/metrics"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -106,6 +107,7 @@ func (uc *DeleteNetworkUseCase) executeNetplanCleanup(ctx context.Context, input
 		} else {
 			output.DeletedInterfaces = append(output.DeletedInterfaces, interfaceName)
 			output.TotalDeleted++
+			metrics.OrphanedInterfacesDeleted.Inc()
 		}
 	}
 	return output, nil
@@ -160,6 +162,7 @@ func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input D
 		} else {
 			output.DeletedInterfaces = append(output.DeletedInterfaces, interfaceName)
 			output.TotalDeleted++
+			metrics.OrphanedInterfacesDeleted.Inc()
 		}
 	}
 	return output, nil

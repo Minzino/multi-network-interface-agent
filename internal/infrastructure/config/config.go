@@ -29,11 +29,20 @@ type DatabaseConfig struct {
 
 // AgentConfig is a struct that holds agent configuration
 type AgentConfig struct {
-	PollInterval    time.Duration
-	MaxRetries      int
-	RetryDelay      time.Duration
-	CommandTimeout  time.Duration
-	BackupDirectory string
+	PollInterval       time.Duration
+	MaxRetries         int
+	RetryDelay         time.Duration
+	CommandTimeout     time.Duration
+	BackupDirectory    string
+	Backoff            BackoffConfig
+	MaxConcurrentTasks int // 동시에 처리할 최대 인터페이스 수
+}
+
+// BackoffConfig is a struct that holds backoff configuration
+type BackoffConfig struct {
+	Enabled     bool
+	MaxInterval time.Duration
+	Multiplier  float64
 }
 
 // HealthConfig is a struct that holds health check configuration
@@ -68,11 +77,17 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
 			MaxLifetime:  getEnvDurationOrDefault("DB_MAX_LIFETIME", 5*time.Minute),
 		},
 		Agent: AgentConfig{
-			PollInterval:    getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second),
-			MaxRetries:      getEnvIntOrDefault("MAX_RETRIES", 3),
-			RetryDelay:      getEnvDurationOrDefault("RETRY_DELAY", 2*time.Second),
-			CommandTimeout:  getEnvDurationOrDefault("COMMAND_TIMEOUT", 30*time.Second),
-			BackupDirectory: getEnvOrDefault("BACKUP_DIR", constants.DefaultBackupDir),
+			PollInterval:       getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second),
+			MaxRetries:         getEnvIntOrDefault("MAX_RETRIES", 3),
+			RetryDelay:         getEnvDurationOrDefault("RETRY_DELAY", 2*time.Second),
+			CommandTimeout:     getEnvDurationOrDefault("COMMAND_TIMEOUT", 30*time.Second),
+			BackupDirectory:    getEnvOrDefault("BACKUP_DIR", constants.DefaultBackupDir),
+			MaxConcurrentTasks: getEnvIntOrDefault("MAX_CONCURRENT_TASKS", 5),
+			Backoff: BackoffConfig{
+				Enabled:     getEnvBoolOrDefault("BACKOFF_ENABLED", true),
+				MaxInterval: getEnvDurationOrDefault("BACKOFF_MAX_INTERVAL", getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second)*10),
+				Multiplier:  getEnvFloatOrDefault("BACKOFF_MULTIPLIER", 2.0),
+			},
 		},
 		Health: HealthConfig{
 			Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
@@ -141,6 +156,24 @@ func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Durati
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBoolOrDefault(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue

@@ -8,10 +8,14 @@ import (
 	"multinic-agent/internal/domain/errors"
 	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/domain/services"
+	"multinic-agent/internal/infrastructure/metrics"
 	"net"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -36,13 +40,14 @@ type NetplanYAML struct {
 
 // ConfigureNetworkUseCase는 네트워크 설정을 처리하는 유스케이스입니다
 type ConfigureNetworkUseCase struct {
-	repository    interfaces.NetworkInterfaceRepository
-	configurer    interfaces.NetworkConfigurer
-	rollbacker    interfaces.NetworkRollbacker
-	namingService *services.InterfaceNamingService
-	fileSystem    interfaces.FileSystem // 파일 시스템 의존성 추가
-	osDetector    interfaces.OSDetector
-	logger        *logrus.Logger
+	repository         interfaces.NetworkInterfaceRepository
+	configurer         interfaces.NetworkConfigurer
+	rollbacker         interfaces.NetworkRollbacker
+	namingService      *services.InterfaceNamingService
+	fileSystem         interfaces.FileSystem // 파일 시스템 의존성 추가
+	osDetector         interfaces.OSDetector
+	logger             *logrus.Logger
+	maxConcurrentTasks int
 }
 
 // NewConfigureNetworkUseCase는 새로운 ConfigureNetworkUseCase를 생성합니다
@@ -54,15 +59,17 @@ func NewConfigureNetworkUseCase(
 	fs interfaces.FileSystem, // 파일 시스템 의존성 추가
 	osDetector interfaces.OSDetector,
 	logger *logrus.Logger,
+	maxConcurrentTasks int,
 ) *ConfigureNetworkUseCase {
 	return &ConfigureNetworkUseCase{
-		repository:    repo,
-		configurer:    configurer,
-		rollbacker:    rollbacker,
-		namingService: naming,
-		fileSystem:    fs,
-		osDetector:    osDetector,
-		logger:        logger,
+		repository:         repo,
+		configurer:         configurer,
+		rollbacker:         rollbacker,
+		namingService:      naming,
+		fileSystem:         fs,
+		osDetector:         osDetector,
+		logger:             logger,
+		maxConcurrentTasks: maxConcurrentTasks,
 	}
 }
 
@@ -98,26 +105,61 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		"os_type": osType,
 	}).Debug("Retrieved interfaces from database")
 
-	var processedCount, failedCount int
+	// 병렬 처리를 위한 설정
+	maxWorkers := uc.maxConcurrentTasks
+	if maxWorkers <= 0 {
+		maxWorkers = 1 // 최소 1개는 처리
+	}
+	
+	var (
+		processedCount int32
+		failedCount    int32
+		wg             sync.WaitGroup
+		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+	)
 
-	// 2. 각 인터페이스 처리 (생성/수정/동기화)
+	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
-		if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount); err != nil {
-			uc.logger.WithError(err).Error("Critical error processing interface")
-		}
+		wg.Add(1)
+		go func(iface entities.NetworkInterface) {
+			defer wg.Done()
+			
+			// 세마포어 획득 (동시 실행 제한)
+			semaphore <- struct{}{}
+			
+			// 동시 처리 메트릭 업데이트
+			currentTasks := float64(len(semaphore))
+			metrics.SetConcurrentTasks(currentTasks)
+			
+			defer func() { 
+				<-semaphore 
+				metrics.SetConcurrentTasks(float64(len(semaphore)))
+			}()
+			
+			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount); err != nil {
+				uc.logger.WithError(err).Error("Critical error processing interface")
+			}
+		}(iface)
 	}
 
+	// 모든 처리가 완료될 때까지 대기
+	wg.Wait()
+
 	return &ConfigureNetworkOutput{
-		ProcessedCount: processedCount,
-		FailedCount:    failedCount,
+		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+		FailedCount:    int(atomic.LoadInt32(&failedCount)),
 		TotalCount:     len(allInterfaces),
 	}, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
 func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
+	startTime := time.Now()
+	
 	// 1. 유효성 검증
 	if err := iface.Validate(); err != nil {
+		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
+		metrics.RecordError("validation")
 		return errors.NewValidationError("Interface validation failed", err)
 	}
 
@@ -129,16 +171,20 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 
 	// 2. 네트워크 설정 적용
 	if err := uc.applyConfiguration(ctx, iface, interfaceName); err != nil {
+		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
 		return err
 	}
 
 	// 3. 설정 검증
 	if err := uc.validateConfiguration(ctx, interfaceName); err != nil {
+		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
 		return err
 	}
 
 	// 4. 성공 상태로 업데이트
 	if err := uc.repository.UpdateInterfaceStatus(ctx, iface.ID, entities.StatusConfigured); err != nil {
+		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
+		metrics.RecordError("system")
 		return errors.NewSystemError("Failed to update interface status", err)
 	}
 
@@ -147,6 +193,7 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 		"interface_name": interfaceName.String(),
 	}).Info("Interface configuration succeeded")
 
+	metrics.RecordInterfaceProcessing(interfaceName.String(), "success", time.Since(startTime).Seconds())
 	return nil
 }
 
@@ -303,6 +350,20 @@ func (uc *ConfigureNetworkUseCase) checkConfigDrift(dbIface entities.NetworkInte
 			"config_change_3": (dbIface.CIDR != fileConfig.cidr),
 			"config_change_4": (dbIface.MTU != fileConfig.mtu),
 		})
+		
+		// 드리프트 타입별 메트릭 기록
+		if !fileConfig.hasAddresses && dbIface.Address != "" {
+			metrics.RecordDrift("missing_address")
+		}
+		if dbIface.Address != fileConfig.address {
+			metrics.RecordDrift("ip_address")
+		}
+		if dbIface.CIDR != fileConfig.cidr {
+			metrics.RecordDrift("cidr")
+		}
+		if dbIface.MTU != fileConfig.mtu {
+			metrics.RecordDrift("mtu")
+		}
 	}
 
 	return isDrifted
@@ -436,12 +497,12 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 }
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
-func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context, iface entities.NetworkInterface, osType interfaces.OSType, processedCount, failedCount *int) error {
+func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context, iface entities.NetworkInterface, osType interfaces.OSType, processedCount, failedCount *int32) error {
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
 	if err != nil {
 		uc.handleInterfaceError("interface name generation", iface.ID, iface.MacAddress, err)
-		*failedCount++
+		atomic.AddInt32(failedCount, 1)
 		return nil // 다음 인터페이스 처리를 위해 에러 반환하지 않음
 	}
 
@@ -460,9 +521,9 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 		
 		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
 			uc.handleProcessingError(ctx, iface, interfaceName, err)
-			*failedCount++
+			atomic.AddInt32(failedCount, 1)
 		} else {
-			*processedCount++
+			atomic.AddInt32(processedCount, 1)
 		}
 	}
 	
