@@ -41,7 +41,6 @@ func (r *MySQLRepository) GetPendingInterfaces(ctx context.Context, nodeName str
 		LEFT JOIN multi_subnet ms ON mi.subnet_id = ms.subnet_id
 		WHERE mi.netplan_success = 0 
 		AND mi.attached_node_name = ?
-		AND mi.deleted_at IS NULL
 		LIMIT 10
 	`
 
@@ -102,7 +101,6 @@ func (r *MySQLRepository) GetConfiguredInterfaces(ctx context.Context, nodeName 
 		LEFT JOIN multi_subnet ms ON mi.subnet_id = ms.subnet_id
 		WHERE mi.netplan_success = 1
 		AND mi.attached_node_name = ?
-		AND mi.deleted_at IS NULL
 	`
 
 	rows, err := r.db.QueryContext(ctx, query, nodeName)
@@ -199,7 +197,7 @@ func (r *MySQLRepository) GetInterfaceByID(ctx context.Context, id int) (*entiti
 		SELECT mi.id, mi.macaddress, mi.attached_node_name, mi.netplan_success, mi.address, mi.mtu, ms.cidr
 		FROM multi_interface mi
 		LEFT JOIN multi_subnet ms ON mi.subnet_id = ms.subnet_id
-		WHERE mi.id = ? AND mi.deleted_at IS NULL
+		WHERE mi.id = ?
 	`
 
 	var iface entities.NetworkInterface
@@ -252,7 +250,7 @@ func (r *MySQLRepository) GetActiveInterfaces(ctx context.Context, nodeName stri
 		FROM multi_interface mi
 		LEFT JOIN multi_subnet ms ON mi.subnet_id = ms.subnet_id
 		WHERE mi.attached_node_name = ?
-		AND mi.deleted_at IS NULL`
+	`
 
 	rows, err := r.db.QueryContext(ctx, query, nodeName)
 	if err != nil {
@@ -317,7 +315,6 @@ func (r *MySQLRepository) GetAllNodeInterfaces(ctx context.Context, nodeName str
 		FROM multi_interface mi
 		LEFT JOIN multi_subnet ms ON mi.subnet_id = ms.subnet_id
 		WHERE mi.attached_node_name = ?
-		AND mi.deleted_at IS NULL
 	`
 
 	rows, err := r.db.QueryContext(ctx, query, nodeName)
