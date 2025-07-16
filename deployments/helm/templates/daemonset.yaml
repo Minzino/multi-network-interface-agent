@@ -79,8 +79,6 @@ spec:
           mountPath: /etc/netplan
         - name: network-scripts
           mountPath: /etc/sysconfig/network-scripts
-        - name: multinic-backups
-          mountPath: /var/lib/multinic
         - name: host-root
           mountPath: /host
           readOnly: true
@@ -88,15 +86,11 @@ spec:
       - name: netplan
         hostPath:
           path: /etc/netplan
-          type: DirectoryOrCreate
+          type: Directory
       - name: network-scripts
         hostPath:
           path: /etc/sysconfig/network-scripts
-          type: DirectoryOrCreate
-      - name: multinic-backups
-        hostPath:
-          path: /var/lib/multinic
-          type: DirectoryOrCreate
+          type: Directory
       - name: host-root
         hostPath:
           path: /
