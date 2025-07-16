@@ -25,8 +25,8 @@ import (
 type NetplanYAML struct {
 	Network struct {
 		Ethernets map[string]struct {
-			DHCP4     bool   `yaml:"dhcp4"`
-			MTU       int    `yaml:"mtu,omitempty"`
+			DHCP4     bool     `yaml:"dhcp4"`
+			MTU       int      `yaml:"mtu,omitempty"`
 			Addresses []string `yaml:"addresses,omitempty"`
 			Match     struct {
 				MACAddress string `yaml:"macaddress"`
@@ -36,7 +36,6 @@ type NetplanYAML struct {
 		Version int `yaml:"version"`
 	} `yaml:"network"`
 }
-
 
 // ConfigureNetworkUseCase는 네트워크 설정을 처리하는 유스케이스입니다
 type ConfigureNetworkUseCase struct {
@@ -100,9 +99,9 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 	}
 
 	uc.logger.WithFields(logrus.Fields{
-		"node_name": input.NodeName,
+		"node_name":       input.NodeName,
 		"interface_count": len(allInterfaces),
-		"os_type": osType,
+		"os_type":         osType,
 	}).Debug("Retrieved interfaces from database")
 
 	// 병렬 처리를 위한 설정
@@ -110,7 +109,7 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 	if maxWorkers <= 0 {
 		maxWorkers = 1 // 최소 1개는 처리
 	}
-	
+
 	var (
 		processedCount int32
 		failedCount    int32
@@ -123,19 +122,19 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		wg.Add(1)
 		go func(iface entities.NetworkInterface) {
 			defer wg.Done()
-			
+
 			// 세마포어 획득 (동시 실행 제한)
 			semaphore <- struct{}{}
-			
+
 			// 동시 처리 메트릭 업데이트
 			currentTasks := float64(len(semaphore))
 			metrics.SetConcurrentTasks(currentTasks)
-			
-			defer func() { 
-				<-semaphore 
+
+			defer func() {
+				<-semaphore
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
-			
+
 			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount); err != nil {
 				uc.logger.WithError(err).Error("Critical error processing interface")
 			}
@@ -155,7 +154,7 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 // processInterface는 개별 인터페이스를 처리합니다
 func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
 	startTime := time.Now()
-	
+
 	// 1. 유효성 검증
 	if err := iface.Validate(); err != nil {
 		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
@@ -239,7 +238,7 @@ func (uc *ConfigureNetworkUseCase) performRollback(ctx context.Context, interfac
 		}).Error("Rollback failed")
 		return err
 	}
-	
+
 	uc.logger.WithFields(logrus.Fields{
 		"interface_name": interfaceName,
 		"stage":          stage,
@@ -252,9 +251,9 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 	// 파일이 존재하지 않으면 드리프트로 간주 (새로 생성해야 함)
 	if !uc.fileSystem.Exists(configPath) {
 		uc.logger.WithFields(logrus.Fields{
-			"interface_id":   dbIface.ID,
-			"mac_address":    dbIface.MacAddress,
-			"config_path":    configPath,
+			"interface_id": dbIface.ID,
+			"mac_address":  dbIface.MacAddress,
+			"config_path":  configPath,
 		}).Debug("Configuration file not found, detected as configuration change")
 		return true
 	}
@@ -273,7 +272,7 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 
 	// Netplan 파일에서 설정 추출
 	fileConfig := uc.extractNetplanConfig(netplanData)
-	
+
 	// MAC 주소 검증
 	if fileConfig.macAddress != dbIface.MacAddress {
 		uc.logger.WithFields(logrus.Fields{
@@ -308,18 +307,18 @@ func (uc *ConfigureNetworkUseCase) parseNetplanFile(content []byte) (*NetplanYAM
 // extractNetplanConfig는 Netplan 데이터에서 설정을 추출합니다
 func (uc *ConfigureNetworkUseCase) extractNetplanConfig(netplanData *NetplanYAML) netplanFileConfig {
 	config := netplanFileConfig{}
-	
+
 	for _, eth := range netplanData.Network.Ethernets {
 		config.macAddress = eth.Match.MACAddress
 		config.hasAddresses = len(eth.Addresses) > 0
 		config.mtu = eth.MTU
-		
+
 		if config.hasAddresses {
 			// Parse the full CIDR from the file
 			ip, ipNet, err := net.ParseCIDR(eth.Addresses[0])
 			if err == nil {
-				config.address = ip.String()      // Get the actual IP address
-				config.cidr = ipNet.String()      // Get the network CIDR
+				config.address = ip.String() // Get the actual IP address
+				config.cidr = ipNet.String() // Get the network CIDR
 			} else {
 				// If parsing fails, use the raw address
 				config.address = eth.Addresses[0]
@@ -328,7 +327,7 @@ func (uc *ConfigureNetworkUseCase) extractNetplanConfig(netplanData *NetplanYAML
 		}
 		break // Assuming one ethernet per file
 	}
-	
+
 	return config
 }
 
@@ -342,15 +341,15 @@ func (uc *ConfigureNetworkUseCase) checkConfigDrift(dbIface entities.NetworkInte
 
 	if isDrifted {
 		uc.logDriftDetails("netplan", dbIface, logrus.Fields{
-			"file_address":   fileConfig.address,
-			"file_cidr":      fileConfig.cidr,
-			"file_mtu":       fileConfig.mtu,
+			"file_address":    fileConfig.address,
+			"file_cidr":       fileConfig.cidr,
+			"file_mtu":        fileConfig.mtu,
 			"config_change_1": (!fileConfig.hasAddresses && dbIface.Address != ""),
 			"config_change_2": (dbIface.Address != fileConfig.address),
 			"config_change_3": (dbIface.CIDR != fileConfig.cidr),
 			"config_change_4": (dbIface.MTU != fileConfig.mtu),
 		})
-		
+
 		// 드리프트 타입별 메트릭 기록
 		if !fileConfig.hasAddresses && dbIface.Address != "" {
 			metrics.RecordDrift("missing_address")
@@ -369,17 +368,16 @@ func (uc *ConfigureNetworkUseCase) checkConfigDrift(dbIface entities.NetworkInte
 	return isDrifted
 }
 
-
 // findIfcfgFile는 해당 인터페이스의 ifcfg 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findIfcfgFile(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
 	fileName := "ifcfg-" + interfaceName
 	filePath := filepath.Join(configDir, fileName)
-	
+
 	if uc.fileSystem.Exists(filePath) {
 		return filePath
 	}
-	
+
 	return ""
 }
 
@@ -393,7 +391,7 @@ func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface e
 
 	// ifcfg 파일 파싱
 	fileConfig := uc.parseIfcfgFile(content)
-	
+
 	// MAC 주소 검증
 	if fileConfig.macAddress != strings.ToLower(dbIface.MacAddress) {
 		uc.logger.WithFields(logrus.Fields{
@@ -402,7 +400,7 @@ func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface e
 		}).Warn("MAC address mismatch in ifcfg file")
 		return true
 	}
-	
+
 	// 드리프트 체크
 	return uc.checkIfcfgDrift(dbIface, fileConfig)
 }
@@ -418,22 +416,22 @@ type ifcfgFileConfig struct {
 // parseIfcfgFile은 ifcfg 파일을 파싱합니다
 func (uc *ConfigureNetworkUseCase) parseIfcfgFile(content []byte) ifcfgFileConfig {
 	config := ifcfgFileConfig{}
-	
+
 	scanner := bufio.NewScanner(strings.NewReader(string(content)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
-		
+
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
-		
+
 		switch key {
 		case "HWADDR":
 			config.macAddress = strings.ToLower(value)
@@ -447,7 +445,7 @@ func (uc *ConfigureNetworkUseCase) parseIfcfgFile(content []byte) ifcfgFileConfi
 			}
 		}
 	}
-	
+
 	return config
 }
 
@@ -460,22 +458,21 @@ func (uc *ConfigureNetworkUseCase) checkIfcfgDrift(dbIface entities.NetworkInter
 			dbPrefix = parts[1]
 		}
 	}
-	
+
 	isDrifted := (dbIface.Address != fileConfig.ipAddress) ||
 		(dbPrefix != "" && fileConfig.prefix != "" && dbPrefix != fileConfig.prefix) ||
 		(dbIface.MTU != fileConfig.mtu)
-	
+
 	if isDrifted {
 		uc.logDriftDetails("ifcfg", dbIface, logrus.Fields{
-			"file_address":    fileConfig.ipAddress,
-			"file_prefix":     fileConfig.prefix,
-			"file_mtu":        fileConfig.mtu,
+			"file_address": fileConfig.ipAddress,
+			"file_prefix":  fileConfig.prefix,
+			"file_mtu":     fileConfig.mtu,
 		})
 	}
-	
+
 	return isDrifted
 }
-
 
 // findNetplanFileForInterface는 해당 인터페이스의 실제 netplan 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName string) string {
@@ -508,7 +505,7 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 
 	// OS별로 처리 필요성 검사
 	shouldProcess, configPath := uc.checkNeedProcessing(ctx, iface, interfaceName, osType)
-	
+
 	if shouldProcess {
 		uc.logger.WithFields(logrus.Fields{
 			"interface_id":   iface.ID,
@@ -518,7 +515,7 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 			"os_type":        osType,
 			"config_path":    configPath,
 		}).Debug("Processing interface")
-		
+
 		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
 			uc.handleProcessingError(ctx, iface, interfaceName, err)
 			atomic.AddInt32(failedCount, 1)
@@ -526,7 +523,7 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 			atomic.AddInt32(processedCount, 1)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -542,12 +539,12 @@ func (uc *ConfigureNetworkUseCase) checkNeedProcessing(ctx context.Context, ifac
 func (uc *ConfigureNetworkUseCase) checkRHELNeedProcessing(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) (bool, string) {
 	configPath := uc.findIfcfgFile(interfaceName.String())
 	fileExists := configPath != ""
-	
+
 	isDrifted := false
 	if fileExists {
 		isDrifted = uc.isIfcfgDrifted(ctx, iface, configPath)
 	}
-	
+
 	// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
 	shouldProcess := !fileExists || isDrifted || iface.Status == entities.StatusPending
 	return shouldProcess, configPath
@@ -575,18 +572,18 @@ func (uc *ConfigureNetworkUseCase) checkNetplanNeedProcessing(ctx context.Contex
 // logDriftDetails는 드리프트 상세 정보를 로깅합니다
 func (uc *ConfigureNetworkUseCase) logDriftDetails(configType string, dbIface entities.NetworkInterface, fileFields logrus.Fields) {
 	fields := logrus.Fields{
-		"interface_id":   dbIface.ID,
-		"mac_address":    dbIface.MacAddress,
-		"db_address":     dbIface.Address,
-		"db_cidr":        dbIface.CIDR,
-		"db_mtu":         dbIface.MTU,
+		"interface_id": dbIface.ID,
+		"mac_address":  dbIface.MacAddress,
+		"db_address":   dbIface.Address,
+		"db_cidr":      dbIface.CIDR,
+		"db_mtu":       dbIface.MTU,
 	}
-	
+
 	// 파일 필드 추가
 	for k, v := range fileFields {
 		fields[k] = v
 	}
-	
+
 	uc.logger.WithFields(fields).Debug(configType + " configuration drift detected")
 }
 
@@ -598,7 +595,7 @@ func (uc *ConfigureNetworkUseCase) handleInterfaceError(operation string, interf
 		"mac_address":  macAddress,
 		"error":        err,
 	}
-	
+
 	// 에러 타입에 따른 로그 레벨 조정
 	switch {
 	case errors.IsValidationError(err):
@@ -653,4 +650,3 @@ func extractInterfaceIndex(name string) int {
 	}
 	return 0
 }
-

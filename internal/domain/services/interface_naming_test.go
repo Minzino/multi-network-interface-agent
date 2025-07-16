@@ -368,13 +368,12 @@ func TestInterfaceNamingService_GetMacAddressForInterface_FromIPCommand(t *testi
 	}
 }
 
-
 func TestInterfaceNamingService_GetHostname(t *testing.T) {
 	tests := []struct {
-		name         string
+		name           string
 		hostnameOutput string
-		expectError  bool
-		expectedHost string
+		expectError    bool
+		expectedHost   string
 	}{
 		{
 			name:           "도메인 접미사가 있는 호스트네임",
@@ -406,11 +405,11 @@ func TestInterfaceNamingService_GetHostname(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockFS := new(MockFileSystem)
 			mockExecutor := new(MockCommandExecutor)
-			
+
 			// 컨테이너 환경 체크 Mock 추가
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 				Return([]byte(""), fmt.Errorf("not found")).Once()
-			
+
 			if tt.expectError && tt.hostnameOutput == "" {
 				mockExecutor.On("ExecuteWithTimeout", mock.Anything, 5*time.Second, "hostname").
 					Return([]byte(""), nil).Once()

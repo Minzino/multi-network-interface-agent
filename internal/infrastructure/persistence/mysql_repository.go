@@ -34,7 +34,7 @@ func (r *MySQLRepository) GetPendingInterfaces(ctx context.Context, nodeName str
 	defer func() {
 		metrics.RecordDBQuery("get_pending", time.Since(startTime).Seconds())
 	}()
-	
+
 	query := `
 		SELECT mi.id, mi.macaddress, mi.attached_node_name, mi.netplan_success, mi.address, mi.mtu, ms.cidr
 		FROM multi_interface mi

@@ -97,7 +97,7 @@ func (a *Application) Run() error {
 	}
 	a.osType = osType
 	a.logger.WithField("os_type", osType).Info("Operating system detected")
-	
+
 	// 에이전트 정보 메트릭 설정
 	hostname, _ := os.Hostname()
 	metrics.SetAgentInfo("0.5.0", string(osType), hostname)
@@ -119,9 +119,9 @@ func (a *Application) Run() error {
 	if cfg.Agent.Backoff.Enabled {
 		// 지수 백오프 전략 사용
 		strategy = polling.NewExponentialBackoffStrategy(
-			cfg.Agent.PollInterval,         // 기본 간격
-			cfg.Agent.Backoff.MaxInterval,  // 최대 간격
-			cfg.Agent.Backoff.Multiplier,   // 지수 계수
+			cfg.Agent.PollInterval,        // 기본 간격
+			cfg.Agent.Backoff.MaxInterval, // 최대 간격
+			cfg.Agent.Backoff.Multiplier,  // 지수 계수
 			a.logger,
 		)
 		a.logger.WithFields(logrus.Fields{
@@ -134,7 +134,7 @@ func (a *Application) Run() error {
 		strategy = &fixedIntervalStrategy{interval: cfg.Agent.PollInterval}
 		a.logger.WithField("interval", cfg.Agent.PollInterval).Info("Fixed interval polling enabled")
 	}
-	
+
 	// 폴링 컨트롤러 생성
 	pollingController := polling.NewPollingController(strategy, a.logger)
 
@@ -189,24 +189,24 @@ func (a *Application) startHealthServer(port string) error {
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
 func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	startTime := time.Now()
-	
+
 	// 호스트네임 가져오기
 	hostname, err := os.Hostname()
 	if err != nil {
 		return err
 	}
-	
+
 	// .novalocal 또는 다른 도메인 접미사 제거
 	originalHostname := hostname
 	if idx := strings.Index(hostname, "."); idx != -1 {
 		hostname = hostname[:idx]
 	}
-	
+
 	// 호스트명 변경사항 디버그 로그
 	if originalHostname != hostname {
 		a.logger.WithFields(logrus.Fields{
 			"original_hostname": originalHostname,
-			"cleaned_hostname": hostname,
+			"cleaned_hostname":  hostname,
 		}).Debug("Hostname domain suffix removed")
 	}
 
@@ -252,7 +252,7 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 			deletedTotal = deleteOutput.TotalDeleted
 			deleteErrors = len(deleteOutput.Errors)
 		}
-		
+
 		a.logger.WithFields(logrus.Fields{
 			"config_processed": configOutput.ProcessedCount,
 			"config_failed":    configOutput.FailedCount,
@@ -271,7 +271,7 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 
 	// 폴링 사이클 메트릭 기록
 	metrics.RecordPollingCycle(time.Since(startTime).Seconds())
-	
+
 	return nil
 }
 

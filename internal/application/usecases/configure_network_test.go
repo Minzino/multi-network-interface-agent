@@ -194,7 +194,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				for i := 0; i < 10; i++ {
 					fs.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
 				}
-				
+
 				// 설정 파일 경로 검색
 				configurer.On("GetConfigDir").Return("/etc/netplan")
 				fs.On("ListFiles", "/etc/netplan").Return([]string{}, nil)
@@ -244,7 +244,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				for i := 0; i < 10; i++ {
 					fs.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
 				}
-				
+
 				// 설정 파일 경로 검색
 				configurer.On("GetConfigDir").Return("/etc/netplan")
 				fs.On("ListFiles", "/etc/netplan").Return([]string{}, nil)
@@ -292,7 +292,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				for i := 0; i < 10; i++ {
 					fs.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
 				}
-				
+
 				// 설정 파일 경로 검색
 				configurer.On("GetConfigDir").Return("/etc/netplan")
 				fs.On("ListFiles", "/etc/netplan").Return([]string{}, nil)
@@ -351,13 +351,13 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 					Status:           entities.StatusConfigured,
 				}
 				repo.On("GetAllNodeInterfaces", mock.Anything, "test-node").Return([]entities.NetworkInterface{dbIface}, nil)
-				
+
 				// 인터페이스 이름 생성
 				// GenerateNextNameForMAC이 여러 인터페이스를 확인할 수 있음
 				for i := 0; i < 10; i++ {
 					fs.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
 				}
-				
+
 				// 설정 파일 경로 설정
 				configurer.On("GetConfigDir").Return("/etc/netplan")
 
@@ -372,7 +372,7 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
       match:
         macaddress: 00:11:22:33:44:55
       addresses: ["1.1.1.2/24"] # Drifted IP
-      mtu: 1400`               // Drifted MTU
+      mtu: 1400` // Drifted MTU
 				fs.On("ListFiles", "/etc/netplan").Return([]string{fileName}, nil)
 				fs.On("Exists", fullPath).Return(true)
 				fs.On("ReadFile", fullPath).Return([]byte(driftedYAML), nil)
@@ -381,12 +381,12 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 				configurer.On("Configure", mock.Anything, dbIface, mock.MatchedBy(func(name entities.InterfaceName) bool {
 					return name.String() == "multinic0"
 				})).Return(nil)
-				
+
 				// 검증 성공
 				configurer.On("Validate", mock.Anything, mock.MatchedBy(func(name entities.InterfaceName) bool {
 					return name.String() == "multinic0"
 				})).Return(nil)
-				
+
 				// 상태 업데이트 - 드리프트 수정 후 성공 상태로 업데이트
 				repo.On("UpdateInterfaceStatus", mock.Anything, 1, entities.StatusConfigured).Return(nil).Maybe()
 				// 실패할 경우를 대비한 설정

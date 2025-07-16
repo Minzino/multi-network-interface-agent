@@ -24,7 +24,7 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
 		isContainer = true
 	}
-	
+
 	return &InterfaceNamingService{
 		fileSystem:      fs,
 		commandExecutor: executor,
@@ -36,19 +36,18 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
-		
+
 		// 실제 인터페이스로 존재하는지 확인
 		if s.isInterfaceInUse(name) {
 			continue
 		}
-		
+
 		// 사용 가능한 이름 발견
 		return entities.NewInterfaceName(name)
 	}
-	
+
 	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
-
 
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
@@ -56,7 +55,7 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 	// 먼저 해당 MAC 주소로 이미 설정된 인터페이스가 있는지 확인
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
-		
+
 		// ip 명령어로 MAC 주소 확인
 		if s.isInterfaceInUse(name) {
 			// 해당 인터페이스의 MAC 주소 확인
@@ -67,7 +66,7 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 			}
 		}
 	}
-	
+
 	// 기존에 할당된 이름이 없으면 새로운 이름 생성
 	return s.GenerateNextName()
 }

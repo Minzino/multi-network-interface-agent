@@ -131,7 +131,7 @@ func (c *Container) initializeUseCases() error {
 	}
 
 	// 네트워크 설정 유스케이스
-		c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCase(
+	c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCase(
 		c.repository,
 		configurer,
 		rollbacker,

@@ -47,10 +47,10 @@ func TestEnvironmentConfigLoader_Load(t *testing.T) {
 			},
 			wantError: false,
 			validate: func(t *testing.T, cfg *Config) {
-				assert.Equal(t, "192.168.34.79", cfg.Database.Host)
-				assert.Equal(t, "30305", cfg.Database.Port)
+				assert.Equal(t, "localhost", cfg.Database.Host)
+				assert.Equal(t, "3306", cfg.Database.Port)
 				assert.Equal(t, "root", cfg.Database.User)
-				assert.Equal(t, "cloud1234", cfg.Database.Password)
+				assert.Equal(t, "", cfg.Database.Password)
 				assert.Equal(t, "multinic", cfg.Database.Database)
 				assert.Equal(t, 30*time.Second, cfg.Agent.PollInterval)
 				assert.Equal(t, "8080", cfg.Health.Port)
@@ -98,7 +98,7 @@ func TestEnvironmentConfigLoader_Load(t *testing.T) {
 			},
 			wantError: false, // 기본값이 설정되므로 에러 없음
 			validate: func(t *testing.T, cfg *Config) {
-				assert.Equal(t, "192.168.34.79", cfg.Database.Host)
+				assert.Equal(t, "localhost", cfg.Database.Host)
 			},
 		},
 	}

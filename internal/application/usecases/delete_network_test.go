@@ -113,13 +113,13 @@ func TestDeleteNetworkUseCase_Execute_NmcliCleanup_Success(t *testing.T) {
 	// Setup hostname
 	mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "hostname").Return([]byte("rhel-node\n"), nil)
 
-	// Mock GetActiveInterfaces for RHEL nmcli cleanup 
+	// Mock GetActiveInterfaces for RHEL nmcli cleanup
 	activeInterfaces := []entities.NetworkInterface{
 		{
-			ID:         1,
-			MacAddress: "00:11:22:33:44:55",
+			ID:               1,
+			MacAddress:       "00:11:22:33:44:55",
 			AttachedNodeName: "rhel-node",
-			Status:    entities.StatusConfigured,
+			Status:           entities.StatusConfigured,
 		},
 	}
 	mockRepository.On("GetActiveInterfaces", ctx, "rhel-node").Return(activeInterfaces, nil)

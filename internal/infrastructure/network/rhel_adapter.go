@@ -213,14 +213,14 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 	//     link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff
 	lines := strings.Split(string(output), "\n")
 	targetMAC := strings.ToLower(macAddress)
-	
+
 	var currentDevice string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		
+
 		// Check if this is a device line (starts with number)
 		if strings.Contains(line, ":") && len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
 			// Extract device name (e.g., "2: eth0:" -> "eth0")

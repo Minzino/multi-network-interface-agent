@@ -122,7 +122,7 @@ func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input D
 
 	// ifcfg 파일 디렉토리
 	ifcfgDir := "/etc/sysconfig/network-scripts"
-	
+
 	// 디렉토리의 파일 목록 가져오기
 	files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
 	if err != nil {
@@ -141,8 +141,8 @@ func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input D
 	}
 
 	uc.logger.WithFields(logrus.Fields{
-		"node_name":       input.NodeName,
-		"orphaned_files":  orphanedFiles,
+		"node_name":      input.NodeName,
+		"orphaned_files": orphanedFiles,
 	}).Info("Orphaned ifcfg files detected - starting cleanup process")
 
 	// 고아 파일 삭제
@@ -261,7 +261,6 @@ func (uc *DeleteNetworkUseCase) extractInterfaceNameFromFile(fileName string) st
 	return ""
 }
 
-
 // deleteNetplanFile은 고아 netplan 파일을 삭제하고 netplan을 재적용합니다
 func (uc *DeleteNetworkUseCase) deleteNetplanFile(ctx context.Context, fileName, interfaceName string) error {
 	uc.logger.WithFields(logrus.Fields{
@@ -342,10 +341,10 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 		activeMACAddresses[macLower] = true
 		activeMACList = append(activeMACList, macLower)
 	}
-	
+
 	uc.logger.WithFields(logrus.Fields{
-		"node_name":      hostname,
-		"active_macs":    activeMACList,
+		"node_name":       hostname,
+		"active_macs":     activeMACList,
 		"interface_count": len(activeInterfaces),
 	}).Debug("Active MAC addresses from database for orphan detection")
 
@@ -365,11 +364,11 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 			}).Warn("Failed to extract MAC address from ifcfg file")
 			continue
 		}
-		
+
 		uc.logger.WithFields(logrus.Fields{
-			"file_name":   fileName,
-			"file_mac":    strings.ToLower(macAddress),
-			"is_active":   activeMACAddresses[strings.ToLower(macAddress)],
+			"file_name": fileName,
+			"file_mac":  strings.ToLower(macAddress),
+			"is_active": activeMACAddresses[strings.ToLower(macAddress)],
 		}).Debug("Checking ifcfg file for orphan detection")
 
 		// DB에 해당 MAC 주소가 없으면 고아 파일
