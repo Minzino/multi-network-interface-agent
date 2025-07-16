@@ -86,11 +86,11 @@ spec:
       - name: netplan
         hostPath:
           path: /etc/netplan
-          type: Directory
+          type: DirectoryOrCreate
       - name: network-scripts
         hostPath:
           path: /etc/sysconfig/network-scripts
-          type: Directory
+          type: DirectoryOrCreate
       - name: host-root
         hostPath:
           path: /
