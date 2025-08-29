@@ -1,16 +1,20 @@
 apiVersion: multinic.io/v1alpha1
 kind: MultiNicNodeConfig
 metadata:
-  name: master2
+  name: viola2-biz-master02
   namespace: multinic-system
   labels:
-    multinic.io/node-name: master2
+    multinic.io/node-name: viola2-biz-master02
 spec:
-  nodeName: master2
+  nodeName: viola2-biz-master02
   interfaces:
     - id: 1
       macAddress: "fa:16:3e:d5:07:35"
       address: "11.11.11.34"
       cidr: "11.11.11.0/24"
       mtu: 1500
-
+    - id: 2
+      macAddress: "fa:16:3e:9a:c2:0f"
+      address: "11.11.11.28"
+      cidr: "11.11.11.0/24"
+      mtu: 1500

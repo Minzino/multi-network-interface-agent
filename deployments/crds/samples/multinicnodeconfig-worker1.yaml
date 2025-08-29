@@ -1,17 +1,15 @@
 apiVersion: multinic.io/v1alpha1
 kind: MultiNicNodeConfig
 metadata:
-  name: worker1
+  name: viola2-biz-worker01
   namespace: multinic-system
   labels:
-    multinic.io/node-name: worker1
-    # multinic.io/instance-id: "<fill-node-systemuuid-if-available>"
+    multinic.io/node-name: viola2-biz-worker01
 spec:
-  nodeName: worker1
+  nodeName: viola2-biz-worker01
   interfaces:
     - id: 1
       macAddress: "fa:16:3e:1c:1a:6e"
       address: "11.11.11.37"
       cidr: "11.11.11.0/24"
       mtu: 1500
-
