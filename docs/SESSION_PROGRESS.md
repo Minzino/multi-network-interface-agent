@@ -116,7 +116,8 @@ git checkout -b feature/node-based-clean-architecture
   - `deployments/helm/templates/rbac.yaml`
 - ✅ 마스터 노드 스케줄 허용: Job tolerations 추가(`control-plane`/`master` NoSchedule 허용)
 - ✅ 컨트롤러 로깅 강화: Reconcile/Job 생성/성공/실패/Watcher 이벤트 로그 출력
-- ✅ Job 수명 주기 개선: 성공/실패 즉시 Job 삭제(Controller가 즉시 정리) + TTL(기본 600s) 옵션
+ - ✅ Job 수명 주기: 성공/실패 직후 Controller가 즉시 Job 삭제(기본 정책)
+   - (옵션) TTL 설정은 안전망으로만 사용 — 컨트롤러 다운/권한 이슈 등으로 즉시 삭제가 실패하는 드문 상황에서 K8s가 최종 청소
 - ✅ CR 삭제 이벤트 처리: Watcher DeleteFunc로 CR 삭제 시 해당 노드 Job 정리
 
 ### 6단계: 통합 테스트 및 검증 ✅
@@ -195,3 +196,7 @@ docs/SESSION_PROGRESS.md를 확인하고 MultiNIC Agent 점진적 개선의 2단
 - ServiceAccount 충돌 시(이미 수동 생성됨):
   - Helm 값으로 `--set serviceAccount.create=false --set serviceAccount.name=multinic-agent` 지정
 - Helm은 Job을 설치하지 않음(`job.install=false`); 컨트롤러가 런타임 생성/정리
+
+## ❓ 설계 보완 Q&A
+- Q. "즉시 삭제하는데 TTL은 왜 필요합니까?"
+  - A. **필수는 아님(옵션)**입니다. 즉시 삭제가 기본이지만, 컨트롤러 비정상 종료·RBAC 일시 실패·네트워크 단절 등으로 삭제 호출이 누락되는 **예외 상황**을 대비한 **세이프티넷**으로 TTL을 둘 수 있습니다. 운영 정책상 불필요하면 값을 제거(미설정)해도 무방합니다.
