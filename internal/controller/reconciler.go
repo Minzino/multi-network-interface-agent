@@ -296,13 +296,13 @@ func (c *Controller) logInterfaceDetails(u *unstructured.Unstructured, nodeName 
         }
         
         // Extract interface details
-        id := getStringFromMap(ifaceMap, "id")
+        id := getIntFromMap(ifaceMap, "id")
         macAddress := getStringFromMap(ifaceMap, "macAddress")
         ipAddress := getStringFromMap(ifaceMap, "address")
         cidr := getStringFromMap(ifaceMap, "cidr")
         mtu := getIntFromMap(ifaceMap, "mtu")
         
-        log.Printf("  Interface[%d]: ID=%s, MAC=%s, IP=%s, CIDR=%s, MTU=%d", 
+        log.Printf("  Interface[%d]: ID=%d, MAC=%s, IP=%s, CIDR=%s, MTU=%d", 
             i, id, macAddress, ipAddress, cidr, mtu)
     }
     log.Printf("=== End Interface Details ===")
@@ -347,7 +347,7 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         }
         
         // Extract interface details
-        id := getStringFromMap(ifaceMap, "id")
+        id := getIntFromMap(ifaceMap, "id")
         macAddress := getStringFromMap(ifaceMap, "macAddress")
         ipAddress := getStringFromMap(ifaceMap, "address")
         cidr := getStringFromMap(ifaceMap, "cidr")
@@ -356,7 +356,7 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         // Build interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
             "interfaceIndex": int64(i),
-            "id":            id,
+            "id":            int64(id),
             "macAddress":    macAddress,
             "address":       ipAddress,
             "cidr":         cidr,
@@ -373,7 +373,7 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         
         interfaceStatuses = append(interfaceStatuses, interfaceStatus)
         
-        log.Printf("Interface[%d] status: ID=%s, MAC=%s, IP=%s, Status=%s, Reason=%s", 
+        log.Printf("Interface[%d] status: ID=%d, MAC=%s, IP=%s, Status=%s, Reason=%s", 
             i, id, macAddress, ipAddress, status, reason)
     }
     
@@ -451,7 +451,7 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
         }
         
         // Extract interface details
-        id := getStringFromMap(ifaceMap, "id")
+        id := getIntFromMap(ifaceMap, "id")
         macAddress := getStringFromMap(ifaceMap, "macAddress")
         ipAddress := getStringFromMap(ifaceMap, "address")
         cidr := getStringFromMap(ifaceMap, "cidr")

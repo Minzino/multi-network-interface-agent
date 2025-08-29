@@ -103,28 +103,19 @@ func (w *Watcher) handleCRDelete(obj interface{}) {
 
 // unwrap supports DeletedFinalStateUnknown and returns *unstructured.Unstructured if possible
 func unwrap(obj interface{}) *unstructured.Unstructured {
-    log.Printf("unwrap: called with obj type=%T, value=%+v", obj, obj)
     switch t := obj.(type) {
     case *unstructured.Unstructured:
-        log.Printf("unwrap: case *unstructured.Unstructured - returning object with name=%s", t.GetName())
         return t
     case cache.DeletedFinalStateUnknown:
-        log.Printf("unwrap: case cache.DeletedFinalStateUnknown - checking Obj field")
         if u, ok := t.Obj.(*unstructured.Unstructured); ok { 
-            log.Printf("unwrap: DeletedFinalStateUnknown contains unstructured object with name=%s", u.GetName())
             return u 
-        } else {
-            log.Printf("unwrap: DeletedFinalStateUnknown.Obj is not *unstructured.Unstructured, type=%T", t.Obj)
         }
     }
     if u, ok := obj.(interface{ GetName() string; GetNamespace() string }); ok {
-        log.Printf("unwrap: fallback - creating unstructured from name/namespace accessors")
         // not strictly *unstructured.Unstructured but has name/ns accessors
         uu := &unstructured.Unstructured{}
         uu.SetName(u.GetName()); uu.SetNamespace(u.GetNamespace())
-        log.Printf("unwrap: fallback - created unstructured with name=%s, namespace=%s", uu.GetName(), uu.GetNamespace())
         return uu
     }
-    log.Printf("unwrap: ERROR - no suitable unwrap method found, returning nil")
     return nil
 }
