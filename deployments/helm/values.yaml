@@ -4,7 +4,7 @@ replicaCount: 1
 image:
   repository: multinic-agent
   pullPolicy: IfNotPresent
-  tag: "0.5.0"
+  tag: "1.0.0"
 
 # 데이터베이스 설정
 database:

@@ -3,7 +3,7 @@
 # 변수
 BINARY_NAME=multinic-agent
 DOCKER_IMAGE=multinic-agent
-VERSION?=latest
+VERSION?=1.0.0
 NAMESPACE?=default
 
 # Go 관련 변수
