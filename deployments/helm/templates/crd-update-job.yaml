@@ -24,7 +24,19 @@ spec:
         - |
           echo "🔧 MultiNIC Agent CRD 업데이트 시작..."
           
-          # CRD 업데이트 적용
+          # CRD 존재 여부 확인
+          if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+            echo "📋 기존 CRD 발견 - replace 방식으로 업데이트..."
+            
+            # 기존 CRD를 삭제하고 새로 생성
+            kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
+            echo "⏳ CRD 삭제 완료, 5초 대기..."
+            sleep 5
+          else
+            echo "📋 새로운 CRD 생성..."
+          fi
+          
+          # 새 CRD 적용
           kubectl apply -f - <<'EOF'
 {{ .Files.Get "crds/multinicnodeconfig-crd.yaml" | indent 10 }}
           EOF
@@ -32,12 +44,16 @@ spec:
           if [ $? -eq 0 ]; then
             echo "✅ CRD 업데이트 완료"
             
-            # CRD가 완전히 적용될 때까지 잠시 대기
+            # CRD가 완전히 적용될 때까지 대기
             echo "⏳ CRD 적용 대기 중..."
-            sleep 5
+            sleep 10
             
             echo "📋 CRD 상태 확인:"
-            kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.metadata.name}: {.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.items.properties}' | grep -o '"[^"]*"' | head -10
+            kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.metadata.name}: 생성됨' 2>/dev/null || echo "CRD 확인 실패"
+            
+            # 스키마 필드 확인
+            echo "🔍 interfaceStatuses 필드 확인:"
+            kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.items.properties}' 2>/dev/null | grep -o '"[^"]*"' | head -5 || echo "스키마 확인 실패"
           else
             echo "❌ CRD 업데이트 실패"
             exit 1
