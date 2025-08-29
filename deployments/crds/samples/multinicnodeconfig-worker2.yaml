@@ -1,0 +1,16 @@
+apiVersion: multinic.io/v1alpha1
+kind: MultiNicNodeConfig
+metadata:
+  name: worker2
+  namespace: multinic-system
+  labels:
+    multinic.io/node-name: worker2
+spec:
+  nodeName: worker2
+  interfaces:
+    - id: 1
+      macAddress: "fa:16:3e:ca:29:c1"
+      address: "11.11.11.38"
+      cidr: "11.11.11.0/24"
+      mtu: 1500
+
