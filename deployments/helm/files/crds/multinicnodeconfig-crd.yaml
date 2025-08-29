@@ -46,10 +46,10 @@ spec:
                   type: string
                   description: OpenStack Instance UUID (equals Node SystemUUID)
                 interfaces:
-                type: array
-                description: Interfaces to configure on the node
-                minItems: 1
-                items:
+                  type: array
+                  description: Interfaces to configure on the node
+                  minItems: 1
+                  items:
                     type: object
                     required:
                       - macAddress
