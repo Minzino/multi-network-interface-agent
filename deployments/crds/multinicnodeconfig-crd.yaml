@@ -49,7 +49,7 @@ spec:
                 type: array
                 description: Interfaces to configure on the node
                 minItems: 1
-                  items:
+                items:
                     type: object
                     required:
                       - macAddress
