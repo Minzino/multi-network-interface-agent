@@ -2,8 +2,8 @@
 
 ## 📅 세션 정보
 - **시작일**: 2025-08-29
-- **현재 상태**: 2단계 완료 - MultiNicNodeConfig CRD 생성 완료
-- **다음 작업**: 3단계 Agent 데이터 소스 변경 (DB → Node CR)
+- **현재 상태**: 5단계 완료 - Controller Watch/Job 스케줄링 및 상태 반영 구현
+- **다음 작업**: 6단계 통합 테스트 및 성능 검증(E2E)
 
 ## 🎯 프로젝트 목표
 
@@ -67,49 +67,52 @@ git checkout -b feature/node-based-clean-architecture
 
 ### 2단계: MultiNicNodeConfig CRD 생성 📝
 **목표**: 노드별 CRD 정의
-**상태**: ⏳ 다음 세션 예정
-**작업**: CRD 스키마 정의 및 생성
+**상태**: ✅ 완료 (2025-08-29)
+**작업 결과**:
+- ✅ CRD 스키마 정의 및 생성 (`deployments/crds/multinicnodeconfig-crd.yaml`)
+- ✅ `spec.nodeName`, `spec.interfaces[]` 단순 구조
+- ✅ `spec.instanceId`(OpenStack UUID) 추가로 노드 매핑 보강
+- ✅ `status.state`, `conditions[]`, `interfaceStatuses[]` 포함
 
 ### 3단계: Agent 데이터 소스 변경 🔄
 **목표**: DB 읽기 → NodeCR 읽기로 변경
 **상태**: ✅ 완료 (2025-08-29)
 **작업 결과**:
-- ✅ 기존 네트워크 로직 100% 유지 (유스케이스와 네트워크 어댑터 무변경)
-- ✅ 데이터 소스 DI 방식으로 교체 가능하도록 구현 (Clean Architecture 유지)
-- ✅ `NodeCR` 기반 레포지토리 추가: `internal/infrastructure/persistence/nodecr_repository.go`
-- ✅ 파일 기반 소스(테스트/로컬): `internal/infrastructure/persistence/nodecr_source_file.go`
-- ✅ 컨테이너 DI 스위치: `DATA_SOURCE=nodecr` 시 DB 연결 없이 NodeCR 사용
-- ✅ TDD 테스트 추가:
-  - `internal/infrastructure/persistence/nodecr_repository_test.go`
-  - `internal/infrastructure/container/container_nodecr_test.go`
+- ✅ 기존 네트워크 로직 100% 유지 (유스케이스/어댑터 무변경)
+- ✅ `NodeCR` 레포지토리 추가: `internal/infrastructure/persistence/nodecr_repository.go`
+- ✅ Kube API 동적 클라이언트 소스: `internal/infrastructure/persistence/nodecr_source_k8s.go`
+- ✅ DI 스위치: `DATA_SOURCE=nodecr` 시 DB 불필요
+- ✅ TDD 테스트: 레포지토리/소스/컨테이너
 
 **환경 변수 (구성 옵션)**:
 - `DATA_SOURCE`: `db`(기본) | `nodecr`
 - `NODE_CR_NAMESPACE`: NodeCR이 위치한 네임스페이스 (기본: `multinic-system`)
 
 **구현 메모**:
-- Kube API 기반 조회: `dynamic.Interface`로 `multinic.io/v1alpha1` `multinicnodeconfigs` 리소스 조회
-- 테스트: client-go `dynamic/fake`로 가짜 클라이언트 사용 (실제 클러스터 불필요)
+- Kube API 기반 조회: `dynamic.Interface`로 `multinic.io/v1alpha1` `multinicnodeconfigs`
+- 테스트: client-go `dynamic/fake`로 단위 테스트
 
 **주의**: NodeCR 아키텍처에서는 Agent가 CR `status`를 직접 수정하지 않음. `UpdateInterfaceStatus`는 no-op이며, 상태 업데이트는 5단계 Controller가 담당.
 
 ### 4단계: Agent 실행 방식 변경 ⚙️
 **목표**: DaemonSet → Job 실행 방식 변경
-**상태**: ⏳ 준비 중 (사전 작업 완료)
-**사전 작업 결과**:
-- ✅ 에이전트의 노드명 결정 로직 개선: `NODE_NAME`(Downward API의 `spec.nodeName`) > hostname 클린 순
-- ✅ Kube API 기반 NodeCR 조회 구성 완료 (Dynamic Client)
-
-**다음 작업**:
-- Job 매니페스트/Helm 추가, `env: { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName }}}`
-- `nodeSelector`/`affinity` 기반 타겟팅
+**상태**: ✅ 완료 (2025-08-29)
+**작업 결과**:
+- ✅ `NODE_NAME <- spec.nodeName` 환경변수 우선 사용 (`cmd/agent/main.go`)
+- ✅ Helm Job 템플릿 추가 (`deployments/helm/templates/job.yaml`)
+- ✅ DS/Job에서 host-root 마운트 제거, OS별 필요한 경로만 사용
 
 ### 5단계: Controller 생성 🎛️
 **목표**: CRD 감시 및 Job 스케줄링 로직 구현
-**상태**: ⏳ 대기 중
-**작업**:
-- CRD Watch 로직
-- Job 생성/관리 로직
+**상태**: ✅ 완료 (2025-08-29)
+**작업 결과**:
+- ✅ Reconciler: Node OS 자동 감지(`osImage`)→ OS별 마운트 포함 Job 생성
+- ✅ Instance 매핑 검증: `spec.instanceId` ↔ `Node.status.nodeInfo.systemUUID`
+- ✅ Status 반영: InProgress → Configured/Failed
+- ✅ Watcher/Service(폴링) 추가, Controller 바이너리(`cmd/controller/main.go`)
+- ✅ Helm Deployment/ RBAC 추가
+  - `deployments/helm/templates/controller-deployment.yaml`
+  - `deployments/helm/templates/rbac.yaml`
 
 ### 6단계: 통합 테스트 및 검증 ✅
 **목표**: 전체 플로우 검증
@@ -159,5 +162,5 @@ docs/SESSION_PROGRESS.md를 확인하고 MultiNIC Agent 점진적 개선의 2단
 
 ---
 
-**문서 최종 업데이트**: 2025-08-29 (1단계 완료)  
-**다음 업데이트 예정**: 2단계 완료 후
+**문서 최종 업데이트**: 2025-08-29 (5단계 완료)  
+**다음 업데이트 예정**: 6단계(E2E) 완료 후
