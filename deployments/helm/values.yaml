@@ -21,7 +21,7 @@ agent:
   # 로그 레벨
   logLevel: "info"
   # 데이터 소스: db | nodecr
-  dataSource: "db"
+  dataSource: "nodecr"
   # nodecr 사용 시 조회할 네임스페이스
   nodeCRNamespace: "multinic-system"
   # 동시 처리할 최대 인터페이스 수 (병렬 처리)
@@ -88,9 +88,13 @@ securityContext:
 
 # Job 실행 모드 설정
 job:
-  enabled: false
+  enabled: true
   # 완료된 Job의 TTL (초), 필요 없으면 주석 처리
   ttlSecondsAfterFinished: 600
+
+# DaemonSet 비활성화(Controller+Job 방식 사용)
+daemonset:
+  enabled: false
 
 # 컨트롤러 설정
 controller:

@@ -252,45 +252,33 @@ fi
 # 12. 전체 상태 확인
 echo -e "\n${BLUE}📊 12단계: 전체 시스템 상태 확인${NC}"
 echo "=================================================="
-echo "📋 MultiNIC Agent DaemonSet 상태:"
-kubectl get daemonset -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent
+echo "📋 Controller Deployment 상태:"
+kubectl get deploy -n $NAMESPACE -l app.kubernetes.io/component=controller -o wide || true
 
 echo ""
-echo "📋 MultiNIC Agent Pod 상태 (모든 노드):"
-kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o wide
+echo "📋 생성된 Agent Jobs:"
+kubectl get jobs -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o wide || true
 
 echo ""
-echo "📋 노드별 Pod 분포:"
-kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o jsonpath='{range .items[*]}{.spec.nodeName}{"\t"}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' | column -t
+echo "📋 Agent Job Pods 상태:"
+kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o wide || true
 
 echo ""
-echo "📋 서비스 및 기타 리소스:"
-kubectl get svc,secret,serviceaccount,clusterrole,clusterrolebinding -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent
+echo "📋 컨트롤러 로그 (최근 50줄):"
+CTRL_POD=$(kubectl get pods -n $NAMESPACE -l app.kubernetes.io/component=controller -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+if [ -n "$CTRL_POD" ]; then
+  kubectl logs -n $NAMESPACE $CTRL_POD --tail=50 || true
+else
+  echo "controller pod not found"
+fi
 echo "=================================================="
 
-# 13. 헬스체크
-echo -e "\n${BLUE}🩺 13단계: 헬스체크${NC}"
-POD=$(kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-if [ ! -z "$POD" ]; then
-    echo -e "${YELLOW}첫 번째 Pod ($POD) 로그 확인 (최근 10줄):${NC}"
-    kubectl logs $POD -n $NAMESPACE --tail=10
-    
-    echo ""
-    echo -e "${YELLOW}헬스체크 엔드포인트 테스트:${NC}"
-echo -e "${BLUE}다음 명령어로 헬스체크를 확인할 수 있습니다:${NC}"
-    echo "kubectl port-forward $POD 8080:8080 -n $NAMESPACE"
-    echo "curl http://localhost:8080/"
-else
-    echo -e "${YELLOW}실행 중인 Pod가 없습니다.${NC}"
-fi
-
-echo -e "\n${GREEN}🎉 MultiNIC Agent v2 배포가 완료되었습니다!${NC}"
+echo -e "\n${GREEN}🎉 MultiNIC Controller+Job 배포가 완료되었습니다!${NC}"
 
 echo -e "\n${YELLOW}📖 사용법:${NC}"
-echo -e "  • Agent 로그 확인: ${BLUE}kubectl logs -f daemonset/$RELEASE_NAME -n $NAMESPACE${NC}"
-echo -e "  • Pod 상태 확인: ${BLUE}kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent${NC}"
-echo -e "  • 특정 노드 Pod 로그: ${BLUE}kubectl logs <pod-name> -n $NAMESPACE${NC}"
-echo -e "  • 헬스체크: ${BLUE}kubectl port-forward <pod-name> 8080:8080 -n $NAMESPACE${NC}"
+echo -e "  • 컨트롤러 로그: ${BLUE}kubectl logs -n $NAMESPACE -l app.kubernetes.io/component=controller -f${NC}"
+echo -e "  • 생성된 Job 확인: ${BLUE}kubectl get jobs -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent${NC}"
+echo -e "  • Agent Job 로그: ${BLUE}kubectl logs -n $NAMESPACE job/<job-name>${NC}"
 
 echo -e "\n${BLUE}🔧 다음 단계:${NC}"
 echo -e "  1. 데이터베이스에 테스트 데이터 추가"
