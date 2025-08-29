@@ -140,6 +140,8 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     "state": "Configured",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
                 })
+                // Immediate cleanup of succeeded job
+                _ = c.deleteJob(ctx, namespace, job.Name)
             }
         } else if job.Status.Failed > 0 {
             if currentState != "Failed" {
@@ -148,10 +150,30 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     "state": "Failed",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
                 })
+                // Cleanup failed job as well (controller may recreate on next reconcile)
+                _ = c.deleteJob(ctx, namespace, job.Name)
             }
         }
     }
     return nil
+}
+
+// deleteJob removes a Job by name, ignore errors
+func (c *Controller) deleteJob(ctx context.Context, namespace, name string) error {
+    policy := metav1.DeletePropagationBackground
+    opts := metav1.DeleteOptions{PropagationPolicy: &policy}
+    if err := c.Client.BatchV1().Jobs(namespace).Delete(ctx, name, opts); err != nil {
+        log.Printf("delete job error: %v", err)
+        return err
+    }
+    log.Printf("job deleted: %s/%s", namespace, name)
+    return nil
+}
+
+// DeleteJobForNode removes job by node name with naming convention
+func (c *Controller) DeleteJobForNode(ctx context.Context, namespace, nodeName string) {
+    name := fmt.Sprintf("multinic-agent-%s", nodeName)
+    _ = c.deleteJob(ctx, namespace, name)
 }
 
 func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstructured, status map[string]any) error {

@@ -8,6 +8,7 @@ import (
     "k8s.io/client-go/dynamic/dynamicinformer"
     "k8s.io/client-go/tools/cache"
     "log"
+    "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Watcher wires informers to the Controller reconcile functions
@@ -41,6 +42,7 @@ func (w *Watcher) Start(ctx context.Context) error {
     crInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
         AddFunc: func(obj interface{}) { log.Printf("CR add event"); w.handleCR(obj) },
         UpdateFunc: func(oldObj, newObj interface{}) { log.Printf("CR update event"); w.handleCR(newObj) },
+        DeleteFunc: func(obj interface{}) { log.Printf("CR delete event"); w.handleCRDelete(obj) },
     })
 
     w.JobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -56,6 +58,9 @@ func (w *Watcher) Start(ctx context.Context) error {
     go w.CRInformerFactory.Start(stop)
     go w.JobInformer.Informer().Run(stop)
 
+    // initial reconcile pass for existing CRs
+    _ = w.Ctrl.ProcessAll(context.Background(), w.Namespace)
+
     // Wait for cache sync
     if !cache.WaitForCacheSync(stop, crInformer.HasSynced, w.JobInformer.Informer().HasSynced) {
         return context.Canceled
@@ -67,9 +72,32 @@ func (w *Watcher) Start(ctx context.Context) error {
 
 // handleCR routes CR add/update to reconcile
 func (w *Watcher) handleCR(obj interface{}) {
-    if un, ok := obj.(interface{ GetName() string; GetNamespace() string }); ok {
-        _ = w.Reconcile(context.Background(), un.GetNamespace(), un.GetName())
-        return
-    }
+    u := unwrap(obj)
+    if u != nil { _ = w.Reconcile(context.Background(), u.GetNamespace(), u.GetName()) }
     // attempt meta access via accessor if needed (omitted for brevity)
+}
+
+// handleCRDelete cleans up any job for the node when CR is deleted
+func (w *Watcher) handleCRDelete(obj interface{}) {
+    u := unwrap(obj)
+    if u == nil { return }
+    nodeName := u.GetName()
+    w.Ctrl.DeleteJobForNode(context.Background(), w.Namespace, nodeName)
+}
+
+// unwrap supports DeletedFinalStateUnknown and returns *unstructured.Unstructured if possible
+func unwrap(obj interface{}) *unstructured.Unstructured {
+    switch t := obj.(type) {
+    case *unstructured.Unstructured:
+        return t
+    case cache.DeletedFinalStateUnknown:
+        if u, ok := t.Obj.(*unstructured.Unstructured); ok { return u }
+    }
+    if u, ok := obj.(interface{ GetName() string; GetNamespace() string }); ok {
+        // not strictly *unstructured.Unstructured but has name/ns accessors
+        uu := &unstructured.Unstructured{}
+        uu.SetName(u.GetName()); uu.SetNamespace(u.GetNamespace())
+        return uu
+    }
+    return nil
 }
