@@ -8,6 +8,7 @@ metadata:
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  ttlSecondsAfterFinished: 120
   template:
     metadata:
       name: {{ include "multinic-agent.fullname" . }}-crd-update
@@ -76,4 +77,3 @@ spec:
             echo "❌ CRD 업데이트 실패"
             exit 1
           fi
-      ttlSecondsAfterFinished: 120
