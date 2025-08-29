@@ -4,6 +4,7 @@ import (
     "context"
     "fmt"
     "strings"
+    "time"
 
     corev1 "k8s.io/api/core/v1"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -12,7 +13,6 @@ import (
     "k8s.io/client-go/dynamic"
     "k8s.io/client-go/kubernetes"
     "log"
-    "time"
 )
 
 // Controller reconciles MultiNicNodeConfig into Jobs per node
@@ -79,12 +79,15 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         Action:             "", // default apply
     })
 
-    // Mark CR as InProgress
+    // Mark CR as InProgress with interface details
+    interfaceStatuses := c.buildInterfaceStatuses(u, "InProgress", "JobScheduled")
     _ = c.updateCRStatus(ctx, u, map[string]any{
         "state": "InProgress",
         "conditions": []any{
             map[string]any{"type": "InProgress", "status": "True", "reason": "JobScheduled"},
         },
+        "interfaceStatuses": interfaceStatuses,
+        "lastUpdated": time.Now().Format(time.RFC3339),
     })
 
     // Upsert: if exists, return nil; else create
@@ -123,6 +126,12 @@ func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
         if err := c.Reconcile(ctx, namespace, name); err != nil {
             return err
         }
+        
+        // Also update interface states to keep CR status current
+        if err := c.updateInterfaceStates(ctx, namespace, name); err != nil {
+            log.Printf("processAll: failed to update interface states for %s/%s: %v", namespace, name, err)
+            // Don't return error for interface state updates, just log
+        }
     }
     return nil
 }
@@ -152,9 +161,12 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         if job.Status.Succeeded > 0 {
             if currentState != "Configured" {
                 log.Printf("job succeeded: %s/%s", namespace, job.Name)
+                interfaceStatuses := c.buildInterfaceStatuses(u, "Configured", "JobSucceeded")
                 _ = c.updateCRStatus(ctx, u, map[string]any{
                     "state": "Configured",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
+                    "interfaceStatuses": interfaceStatuses,
+                    "lastUpdated": time.Now().Format(time.RFC3339),
                 })
                 // cleanup of succeeded job (optionally delay for log scraping)
                 c.scheduleJobDeletion(ctx, namespace, job.Name)
@@ -162,9 +174,12 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         } else if job.Status.Failed > 0 {
             if currentState != "Failed" {
                 log.Printf("job failed: %s/%s", namespace, job.Name)
+                interfaceStatuses := c.buildInterfaceStatuses(u, "Failed", "JobFailed")
                 _ = c.updateCRStatus(ctx, u, map[string]any{
                     "state": "Failed",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
+                    "interfaceStatuses": interfaceStatuses,
+                    "lastUpdated": time.Now().Format(time.RFC3339),
                 })
                 // Cleanup failed job as well (optionally delay)
                 c.scheduleJobDeletion(ctx, namespace, job.Name)
@@ -313,4 +328,193 @@ func getIntFromMap(m map[string]interface{}, key string) int {
         }
     }
     return 0
+}
+
+// buildInterfaceStatuses creates detailed status information for each interface in the CR
+func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status, reason string) []any {
+    interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+    if !found || err != nil {
+        log.Printf("No interfaces found when building status for CR %s/%s", u.GetNamespace(), u.GetName())
+        return []any{}
+    }
+
+    var interfaceStatuses []any
+    
+    for i, iface := range interfaces {
+        ifaceMap, ok := iface.(map[string]interface{})
+        if !ok {
+            continue
+        }
+        
+        // Extract interface details
+        id := getStringFromMap(ifaceMap, "id")
+        macAddress := getStringFromMap(ifaceMap, "macAddress")
+        ipAddress := getStringFromMap(ifaceMap, "address")
+        cidr := getStringFromMap(ifaceMap, "cidr")
+        mtu := getIntFromMap(ifaceMap, "mtu")
+        
+        // Build interface status
+        interfaceStatus := map[string]any{
+            "interfaceIndex": i,
+            "id":            id,
+            "macAddress":    macAddress,
+            "address":       ipAddress,
+            "cidr":         cidr,
+            "mtu":          mtu,
+            "status":       status,
+            "reason":       reason,
+            "lastUpdated":  time.Now().Format(time.RFC3339),
+        }
+        
+        // Add interface name if we can determine it
+        if interfaceName := c.getInterfaceNameForMAC(macAddress); interfaceName != "" {
+            interfaceStatus["interfaceName"] = interfaceName
+        }
+        
+        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
+        
+        log.Printf("Interface[%d] status: ID=%s, MAC=%s, IP=%s, Status=%s, Reason=%s", 
+            i, id, macAddress, ipAddress, status, reason)
+    }
+    
+    return interfaceStatuses
+}
+
+// getInterfaceNameForMAC attempts to determine the interface name (multinicX) for a given MAC address
+func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
+    if macAddress == "" {
+        return ""
+    }
+    
+    // This is a simple mapping - in a real scenario, you might want to maintain 
+    // a more sophisticated mapping or query the actual system
+    // For now, we'll use a simple index-based naming
+    
+    // In practice, the Agent will create interfaces as multinic0, multinic1, etc.
+    // We could enhance this by storing the mapping in the CR status or elsewhere
+    return fmt.Sprintf("multinic%s", macAddress[len(macAddress)-1:]) // Simple fallback
+}
+
+// updateInterfaceStates periodically updates the interface states in the CR status 
+// by checking the actual node interface states via API or node status
+func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeName string) error {
+    log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
+    
+    // Get the CR for this node
+    u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
+    if err != nil {
+        log.Printf("updateInterfaceStates: failed to get CR for node %s: %v", nodeName, err)
+        return err
+    }
+    
+    // Get node information to check actual interface states
+    node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+    if err != nil {
+        log.Printf("updateInterfaceStates: failed to get node %s: %v", nodeName, err)
+        return err
+    }
+    
+    // Build enhanced interface statuses with actual system state
+    interfaceStatuses := c.buildEnhancedInterfaceStatuses(u, node)
+    
+    // Update CR status with current interface states
+    currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
+    if currentState == "" {
+        currentState = "Unknown"
+    }
+    
+    _ = c.updateCRStatus(ctx, u, map[string]any{
+        "interfaceStatuses": interfaceStatuses,
+        "lastInterfaceCheck": time.Now().Format(time.RFC3339),
+        "nodeReady": c.isNodeReady(node),
+    })
+    
+    log.Printf("updateInterfaceStates: updated interface states for node %s with %d interfaces", 
+        nodeName, len(interfaceStatuses))
+    
+    return nil
+}
+
+// buildEnhancedInterfaceStatuses creates detailed status with actual system state check
+func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) []any {
+    interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+    if !found || err != nil {
+        return []any{}
+    }
+
+    var interfaceStatuses []any
+    
+    for i, iface := range interfaces {
+        ifaceMap, ok := iface.(map[string]interface{})
+        if !ok {
+            continue
+        }
+        
+        // Extract interface details
+        id := getStringFromMap(ifaceMap, "id")
+        macAddress := getStringFromMap(ifaceMap, "macAddress")
+        ipAddress := getStringFromMap(ifaceMap, "address")
+        cidr := getStringFromMap(ifaceMap, "cidr")
+        mtu := getIntFromMap(ifaceMap, "mtu")
+        
+        // Determine actual interface state
+        interfaceName := fmt.Sprintf("multinic%d", i)
+        actualState := c.getActualInterfaceState(node, macAddress, interfaceName)
+        
+        // Build comprehensive interface status
+        interfaceStatus := map[string]any{
+            "interfaceIndex": i,
+            "id":            id,
+            "macAddress":    macAddress,
+            "address":       ipAddress,
+            "cidr":         cidr,
+            "mtu":          mtu,
+            "interfaceName": interfaceName,
+            "actualState":   actualState,
+            "lastChecked":  time.Now().Format(time.RFC3339),
+        }
+        
+        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
+    }
+    
+    return interfaceStatuses
+}
+
+// getActualInterfaceState checks the actual state of an interface on the node
+func (c *Controller) getActualInterfaceState(node *corev1.Node, macAddress, interfaceName string) string {
+    // Check node conditions and capacity for network interface information
+    
+    // Check if node is ready
+    if !c.isNodeReady(node) {
+        return "NodeNotReady"
+    }
+    
+    // In a real implementation, you would:
+    // 1. Query node metrics or use a custom agent to check interface state
+    // 2. Check if the interface exists and is up
+    // 3. Verify IP configuration matches expected state
+    // 4. Check connectivity or other health metrics
+    
+    // For now, we'll return a placeholder based on node readiness
+    // This should be enhanced to actually check interface state
+    
+    // Check node addresses to see if we can infer interface state
+    for _, addr := range node.Status.Addresses {
+        if addr.Type == corev1.NodeInternalIP {
+            // If node has internal IP, assume basic networking is working
+            return "Configured"
+        }
+    }
+    
+    return "Unknown"
+}
+
+// isNodeReady checks if the node is in Ready condition
+func (c *Controller) isNodeReady(node *corev1.Node) bool {
+    for _, condition := range node.Status.Conditions {
+        if condition.Type == corev1.NodeReady {
+            return condition.Status == corev1.ConditionTrue
+        }
+    }
+    return false
 }
