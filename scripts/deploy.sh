@@ -67,7 +67,7 @@ for node in "${ALL_NODES[@]}"; do
     # 이미지 파일 전송
     if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
         # 원격 노드에서 이미지 로드
-        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no root@${node} "nerdctl load -i ${TMP_IMAGE_FILE} && rm ${TMP_IMAGE_FILE}"; then
+        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
             echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
         else
             echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
