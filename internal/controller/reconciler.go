@@ -42,6 +42,10 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     if nodeName == "" {
         nodeName = u.GetName()
     }
+    
+    // Log interface details
+    c.logInterfaceDetails(u, nodeName)
+    
     // instance-id verification via spec.instanceId or label
     instanceID := nestedString(u, "spec", "instanceId")
     if instanceID == "" {
@@ -257,4 +261,56 @@ func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstruc
         return err
     }
     return nil
+}
+
+// logInterfaceDetails logs detailed information about network interfaces from the CR
+func (c *Controller) logInterfaceDetails(u *unstructured.Unstructured, nodeName string) {
+    // Extract interfaces array from spec
+    interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+    if !found || err != nil {
+        log.Printf("No interfaces found in CR %s/%s", u.GetNamespace(), u.GetName())
+        return
+    }
+
+    log.Printf("=== Interface Details for Node: %s (CR: %s/%s) ===", nodeName, u.GetNamespace(), u.GetName())
+    
+    for i, iface := range interfaces {
+        ifaceMap, ok := iface.(map[string]interface{})
+        if !ok {
+            continue
+        }
+        
+        // Extract interface details
+        id := getStringFromMap(ifaceMap, "id")
+        macAddress := getStringFromMap(ifaceMap, "macAddress")
+        ipAddress := getStringFromMap(ifaceMap, "address")
+        cidr := getStringFromMap(ifaceMap, "cidr")
+        mtu := getIntFromMap(ifaceMap, "mtu")
+        
+        log.Printf("  Interface[%d]: ID=%s, MAC=%s, IP=%s, CIDR=%s, MTU=%d", 
+            i, id, macAddress, ipAddress, cidr, mtu)
+    }
+    log.Printf("=== End Interface Details ===")
+}
+
+// Helper functions for extracting values from interface maps
+func getStringFromMap(m map[string]interface{}, key string) string {
+    if val, ok := m[key]; ok {
+        if str, ok := val.(string); ok {
+            return str
+        }
+    }
+    return ""
+}
+
+func getIntFromMap(m map[string]interface{}, key string) int {
+    if val, ok := m[key]; ok {
+        if intVal, ok := val.(int); ok {
+            return intVal
+        }
+        if floatVal, ok := val.(float64); ok {
+            return int(floatVal)
+        }
+    }
+    return 0
 }
