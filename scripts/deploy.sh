@@ -61,8 +61,16 @@ TMP_IMAGE_FILE="/tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
 echo -e "${YELLOW}이미지 저장 중...${NC}"
 nerdctl save ${IMAGE_NAME}:${IMAGE_TAG} -o ${TMP_IMAGE_FILE}
 
+CURRENT_NODE=$(hostname)
+
 for node in "${ALL_NODES[@]}"; do
     echo -e "${YELLOW}노드 ${node}에 이미지 배포 중...${NC}"
+    
+    if [ "$node" = "$CURRENT_NODE" ]; then
+        # 현재 노드는 이미 이미지가 있으므로 건너뛰기
+        echo -e "${GREEN}✓ ${node}: 현재 노드 (이미지 이미 존재)${NC}"
+        continue
+    fi
     
     # 이미지 파일 전송
     if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
