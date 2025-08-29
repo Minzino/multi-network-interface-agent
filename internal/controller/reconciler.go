@@ -270,10 +270,16 @@ func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstruc
     if current == nil { current = map[string]any{} }
     for k, v := range status { current[k] = v }
     _ = unstructured.SetNestedMap(obj.Object, current, "status")
-    // Try UpdateStatus, fallback to Update for fake client compatibility
-    if _, err := c.Dyn.Resource(nodeCRGVR).Namespace(obj.GetNamespace()).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
-        // ignore error in this simple flow
-        return err
+    
+    // Try UpdateStatus first (proper way for status subresource)
+    client := c.Dyn.Resource(nodeCRGVR).Namespace(obj.GetNamespace())
+    if _, err := client.UpdateStatus(ctx, obj, metav1.UpdateOptions{}); err != nil {
+        // Fallback to regular Update if UpdateStatus fails
+        log.Printf("UpdateStatus failed, trying regular Update: %v", err)
+        if _, err2 := client.Update(ctx, obj, metav1.UpdateOptions{}); err2 != nil {
+            log.Printf("Status update failed: %v", err2)
+            return err2
+        }
     }
     return nil
 }
@@ -323,9 +329,14 @@ func getIntFromMap(m map[string]interface{}, key string) int {
         if intVal, ok := val.(int); ok {
             return intVal
         }
+        if int64Val, ok := val.(int64); ok {
+            return int(int64Val)
+        }
         if floatVal, ok := val.(float64); ok {
             return int(floatVal)
         }
+        // Debug: log unexpected type
+        log.Printf("DEBUG: getIntFromMap key=%s, unexpected type: %T, value: %v", key, val, val)
     }
     return 0
 }
