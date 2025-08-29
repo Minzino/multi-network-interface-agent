@@ -88,7 +88,9 @@ securityContext:
 
 # Job 실행 모드 설정
 job:
-  enabled: true
+  # install: Helm이 샘플/수동 테스트 용도로 Job 리소스를 직접 생성할지 여부
+  # 기본은 false (컨트롤러가 필요 시 Job을 생성)
+  install: false
   # 완료된 Job의 TTL (초), 필요 없으면 주석 처리
   ttlSecondsAfterFinished: 600
 
