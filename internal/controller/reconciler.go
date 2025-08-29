@@ -132,7 +132,16 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         nodeName := job.Labels["multinic.io/node-name"]
         if nodeName == "" { continue }
         u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
-        if err != nil { continue }
+        action := job.Labels["multinic.io/action"]
+        if err != nil {
+            // CR missing (e.g., during cleanup). If cleanup job finished, delete it.
+            if action == "cleanup" {
+                if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
+                    c.scheduleJobDeletion(ctx, namespace, job.Name)
+                }
+            }
+            continue
+        }
 
         // Determine completion state
         currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
@@ -181,12 +190,23 @@ func (c *Controller) DeleteJobForNode(ctx context.Context, namespace, nodeName s
 
 // LaunchCleanupJob creates a cleanup-mode job for the given node
 func (c *Controller) LaunchCleanupJob(ctx context.Context, namespace, nodeName string) error {
+    log.Printf("LaunchCleanupJob: starting cleanup job launch for node=%s namespace=%s", nodeName, namespace)
+    
     node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
-    if err != nil { return err }
+    if err != nil { 
+        log.Printf("LaunchCleanupJob: failed to get node %s: %v", nodeName, err)
+        return err 
+    }
     osImage := node.Status.NodeInfo.OSImage
+    log.Printf("LaunchCleanupJob: node=%s osImage=%s", nodeName, osImage)
+    
+    // use a distinct name to avoid colliding with the apply job
+    cleanupName := fmt.Sprintf("multinic-agent-cleanup-%s", nodeName)
+    log.Printf("LaunchCleanupJob: building job with name=%s", cleanupName)
+    
     job := BuildAgentJob(osImage, JobParams{
         Namespace:           namespace,
-        Name:                fmt.Sprintf("multinic-agent-%s", nodeName),
+        Name:                cleanupName,
         Image:               c.AgentImage,
         PullPolicy:          c.ImagePullPolicy,
         ServiceAccountName:  c.ServiceAccount,
@@ -195,11 +215,20 @@ func (c *Controller) LaunchCleanupJob(ctx context.Context, namespace, nodeName s
         TTLSecondsAfterDone: c.JobTTLSeconds,
         Action:              "cleanup",
     })
+    
+    log.Printf("LaunchCleanupJob: checking if cleanup job already exists: %s/%s", namespace, cleanupName)
     if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
+        log.Printf("cleanup job already exists: %s/%s", namespace, job.Name)
         return nil
     }
-    _, err = c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
-    return err
+    
+    log.Printf("LaunchCleanupJob: attempting to create cleanup job: %s/%s", namespace, cleanupName)
+    if _, err := c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+        log.Printf("create cleanup job error: %v", err)
+        return err
+    }
+    log.Printf("cleanup job created: %s/%s for node=%s osImage=%s", namespace, job.Name, nodeName, osImage)
+    return nil
 }
 
 // scheduleJobDeletion deletes a job now or after optional delay

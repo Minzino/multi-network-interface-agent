@@ -18,6 +18,10 @@ build:
 	@echo ">>> 바이너리 빌드 중..."
 	@go build -o $(GOBIN)/$(BINARY_NAME) cmd/agent/main.go
 
+build-controller:
+	@echo ">>> Controller 바이너리 빌드 중..."
+	@go build -o $(GOBIN)/multinic-controller cmd/controller/main.go
+
 # 테스트
 test:
 	@echo ">>> 테스트 실행 중..."

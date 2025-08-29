@@ -72,6 +72,12 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
 
     backoffLimit := int32(1)
 
+    // derive action label
+    action := p.Action
+    if strings.TrimSpace(action) == "" {
+        action = "apply"
+    }
+
     job := &batchv1.Job{
         ObjectMeta: metav1.ObjectMeta{
             Name:      p.Name,
@@ -80,6 +86,7 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                 "app.kubernetes.io/name":       "multinic-agent",
                 "app.kubernetes.io/managed-by": "multinic-controller",
                 "multinic.io/node-name":        p.NodeName,
+                "multinic.io/action":           action,
             },
         },
         Spec: batchv1.JobSpec{

@@ -42,7 +42,11 @@ func (w *Watcher) Start(ctx context.Context) error {
     crInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
         AddFunc: func(obj interface{}) { log.Printf("CR add event"); w.handleCR(obj) },
         UpdateFunc: func(oldObj, newObj interface{}) { log.Printf("CR update event"); w.handleCR(newObj) },
-        DeleteFunc: func(obj interface{}) { log.Printf("CR delete event"); w.handleCRDelete(obj) },
+        DeleteFunc: func(obj interface{}) { 
+            log.Printf("CR delete event - about to call handleCRDelete with obj type=%T", obj)
+            w.handleCRDelete(obj) 
+            log.Printf("CR delete event - handleCRDelete call completed")
+        },
     })
 
     w.JobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -80,26 +84,47 @@ func (w *Watcher) handleCR(obj interface{}) {
 
 // handleCRDelete cleans up any job for the node when CR is deleted
 func (w *Watcher) handleCRDelete(obj interface{}) {
+    log.Printf("handleCRDelete: FUNCTION CALLED with obj type=%T", obj)
     u := unwrap(obj)
-    if u == nil { return }
+    if u == nil { 
+        log.Printf("handleCRDelete: ERROR - failed to unwrap deleted object, obj=%+v", obj)
+        return 
+    }
     nodeName := u.GetName()
+    log.Printf("handleCRDelete: SUCCESS - unwrapped object, nodeName=%s, namespace=%s", nodeName, u.GetNamespace())
+    log.Printf("handleCRDelete: attempting to launch cleanup job for node=%s", nodeName)
     // launch cleanup job to remove interfaces on CR delete
-    _ = w.Ctrl.LaunchCleanupJob(context.Background(), w.Namespace, nodeName)
+    if err := w.Ctrl.LaunchCleanupJob(context.Background(), w.Namespace, nodeName); err != nil {
+        log.Printf("handleCRDelete: failed to launch cleanup job for node=%s: %v", nodeName, err)
+    } else {
+        log.Printf("handleCRDelete: cleanup job launch initiated for node=%s", nodeName)
+    }
 }
 
 // unwrap supports DeletedFinalStateUnknown and returns *unstructured.Unstructured if possible
 func unwrap(obj interface{}) *unstructured.Unstructured {
+    log.Printf("unwrap: called with obj type=%T, value=%+v", obj, obj)
     switch t := obj.(type) {
     case *unstructured.Unstructured:
+        log.Printf("unwrap: case *unstructured.Unstructured - returning object with name=%s", t.GetName())
         return t
     case cache.DeletedFinalStateUnknown:
-        if u, ok := t.Obj.(*unstructured.Unstructured); ok { return u }
+        log.Printf("unwrap: case cache.DeletedFinalStateUnknown - checking Obj field")
+        if u, ok := t.Obj.(*unstructured.Unstructured); ok { 
+            log.Printf("unwrap: DeletedFinalStateUnknown contains unstructured object with name=%s", u.GetName())
+            return u 
+        } else {
+            log.Printf("unwrap: DeletedFinalStateUnknown.Obj is not *unstructured.Unstructured, type=%T", t.Obj)
+        }
     }
     if u, ok := obj.(interface{ GetName() string; GetNamespace() string }); ok {
+        log.Printf("unwrap: fallback - creating unstructured from name/namespace accessors")
         // not strictly *unstructured.Unstructured but has name/ns accessors
         uu := &unstructured.Unstructured{}
         uu.SetName(u.GetName()); uu.SetNamespace(u.GetNamespace())
+        log.Printf("unwrap: fallback - created unstructured with name=%s, namespace=%s", uu.GetName(), uu.GetNamespace())
         return uu
     }
+    log.Printf("unwrap: ERROR - no suitable unwrap method found, returning nil")
     return nil
 }
