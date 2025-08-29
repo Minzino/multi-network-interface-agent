@@ -83,7 +83,8 @@ func (w *Watcher) handleCRDelete(obj interface{}) {
     u := unwrap(obj)
     if u == nil { return }
     nodeName := u.GetName()
-    w.Ctrl.DeleteJobForNode(context.Background(), w.Namespace, nodeName)
+    // launch cleanup job to remove interfaces on CR delete
+    _ = w.Ctrl.LaunchCleanupJob(context.Background(), w.Namespace, nodeName)
 }
 
 // unwrap supports DeletedFinalStateUnknown and returns *unstructured.Unstructured if possible

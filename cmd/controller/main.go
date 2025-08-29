@@ -30,6 +30,7 @@ func main() {
     saName := getenv("CONTROLLER_SA_NAME", getenv("SERVICE_ACCOUNT", "multinic-agent"))
     mode := getenv("CONTROLLER_MODE", "watch")
     jobTTL := getenv("CONTROLLER_JOB_TTL", "600")
+    jobDelDelay := getenv("CONTROLLER_JOB_DELETE_DELAY", "0")
 
     c := &controller.Controller{
         Dyn:             dyn,
@@ -42,6 +43,9 @@ func main() {
     if secs, err := time.ParseDuration(jobTTL+"s"); err == nil {
         t := int32(secs / time.Second)
         c.JobTTLSeconds = &t
+    }
+    if secs, err := time.ParseDuration(jobDelDelay+"s"); err == nil {
+        c.JobDeleteDelaySeconds = int(secs / time.Second)
     }
 
     if mode == "watch" {

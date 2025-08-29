@@ -138,6 +138,17 @@ func (a *Application) Run() error {
     // RUN_MODE=job: 한 번 처리 후 종료
     if cfg.Agent.RunMode == "job" {
         a.logger.Info("MultiNIC agent started (run mode: job)")
+        // optional cleanup action
+        action := os.Getenv("AGENT_ACTION")
+        if strings.EqualFold(action, "cleanup") {
+            // 실행: 삭제 유스케이스만 수행
+            deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
+            if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
+                a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
+                return err
+            }
+            return nil
+        }
         if err := a.processNetworkConfigurations(ctx); err != nil {
             a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
             return err

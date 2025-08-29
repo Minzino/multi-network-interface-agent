@@ -23,6 +23,7 @@ type Controller struct {
     ServiceAccount   string
     NodeCRNamespace  string
     JobTTLSeconds    *int32
+    JobDeleteDelaySeconds int // optional grace period before deleting jobs (seconds)
 }
 
 var nodeCRGVR = schema.GroupVersionResource{Group: "multinic.io", Version: "v1alpha1", Resource: "multinicnodeconfigs"}
@@ -70,6 +71,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         NodeName:           nodeName,
         NodeCRNamespace:    c.NodeCRNamespace,
         TTLSecondsAfterDone: c.JobTTLSeconds,
+        Action:             "", // default apply
     })
 
     // Mark CR as InProgress
@@ -140,8 +142,8 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     "state": "Configured",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
                 })
-                // Immediate cleanup of succeeded job
-                _ = c.deleteJob(ctx, namespace, job.Name)
+                // cleanup of succeeded job (optionally delay for log scraping)
+                c.scheduleJobDeletion(ctx, namespace, job.Name)
             }
         } else if job.Status.Failed > 0 {
             if currentState != "Failed" {
@@ -150,8 +152,8 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     "state": "Failed",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
                 })
-                // Cleanup failed job as well (controller may recreate on next reconcile)
-                _ = c.deleteJob(ctx, namespace, job.Name)
+                // Cleanup failed job as well (optionally delay)
+                c.scheduleJobDeletion(ctx, namespace, job.Name)
             }
         }
     }
@@ -174,6 +176,42 @@ func (c *Controller) deleteJob(ctx context.Context, namespace, name string) erro
 func (c *Controller) DeleteJobForNode(ctx context.Context, namespace, nodeName string) {
     name := fmt.Sprintf("multinic-agent-%s", nodeName)
     _ = c.deleteJob(ctx, namespace, name)
+}
+
+// LaunchCleanupJob creates a cleanup-mode job for the given node
+func (c *Controller) LaunchCleanupJob(ctx context.Context, namespace, nodeName string) error {
+    node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+    if err != nil { return err }
+    osImage := node.Status.NodeInfo.OSImage
+    job := BuildAgentJob(osImage, JobParams{
+        Namespace:           namespace,
+        Name:                fmt.Sprintf("multinic-agent-%s", nodeName),
+        Image:               c.AgentImage,
+        PullPolicy:          c.ImagePullPolicy,
+        ServiceAccountName:  c.ServiceAccount,
+        NodeName:            nodeName,
+        NodeCRNamespace:     c.NodeCRNamespace,
+        TTLSecondsAfterDone: c.JobTTLSeconds,
+        Action:              "cleanup",
+    })
+    if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
+        return nil
+    }
+    _, err = c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{})
+    return err
+}
+
+// scheduleJobDeletion deletes a job now or after optional delay
+func (c *Controller) scheduleJobDeletion(ctx context.Context, namespace, name string) {
+    if c.JobDeleteDelaySeconds <= 0 {
+        _ = c.deleteJob(ctx, namespace, name)
+        return
+    }
+    delay := time.Duration(c.JobDeleteDelaySeconds) * time.Second
+    go func() {
+        <-time.After(delay)
+        _ = c.deleteJob(context.Background(), namespace, name)
+    }()
 }
 
 func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstructured, status map[string]any) error {

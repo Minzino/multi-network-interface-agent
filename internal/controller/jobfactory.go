@@ -39,6 +39,7 @@ type JobParams struct {
     NodeName            string
     NodeCRNamespace     string
     TTLSecondsAfterDone *int32
+    Action              string // "" | "cleanup"
 }
 
 // BuildAgentJob builds a Job manifest targeting a specific node with OS-aware mounts.
@@ -108,6 +109,8 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                                 {Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
                                 {Name: "LOG_LEVEL", Value: "info"},
                                 {Name: "POLL_INTERVAL", Value: "30s"},
+                                // optional action: cleanup
+                                {Name: "AGENT_ACTION", Value: p.Action},
                             },
                             Ports: []corev1.ContainerPort{{Name: "health", ContainerPort: 8080}},
                             LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(8080)}}, InitialDelaySeconds: 30, PeriodSeconds: 30},
