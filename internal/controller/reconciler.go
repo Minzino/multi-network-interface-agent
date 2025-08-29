@@ -353,14 +353,14 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         cidr := getStringFromMap(ifaceMap, "cidr")
         mtu := getIntFromMap(ifaceMap, "mtu")
         
-        // Build interface status
+        // Build interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
-            "interfaceIndex": i,
+            "interfaceIndex": int64(i),
             "id":            id,
             "macAddress":    macAddress,
             "address":       ipAddress,
             "cidr":         cidr,
-            "mtu":          mtu,
+            "mtu":          int64(mtu),
             "status":       status,
             "reason":       reason,
             "lastUpdated":  time.Now().Format(time.RFC3339),
@@ -461,14 +461,14 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
         interfaceName := fmt.Sprintf("multinic%d", i)
         actualState := c.getActualInterfaceState(node, macAddress, interfaceName)
         
-        // Build comprehensive interface status
+        // Build comprehensive interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
-            "interfaceIndex": i,
+            "interfaceIndex": int64(i),
             "id":            id,
             "macAddress":    macAddress,
             "address":       ipAddress,
             "cidr":         cidr,
-            "mtu":          mtu,
+            "mtu":          int64(mtu),
             "interfaceName": interfaceName,
             "actualState":   actualState,
             "lastChecked":  time.Now().Format(time.RFC3339),
