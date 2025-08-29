@@ -58,8 +58,9 @@ func (w *Watcher) Start(ctx context.Context) error {
     go w.CRInformerFactory.Start(stop)
     go w.JobInformer.Informer().Run(stop)
 
-    // initial reconcile pass for existing CRs
+    // initial reconcile/cleanup pass for existing CRs/Jobs
     _ = w.Ctrl.ProcessAll(context.Background(), w.Namespace)
+    _ = w.Ctrl.ProcessJobs(context.Background(), w.Namespace)
 
     // Wait for cache sync
     if !cache.WaitForCacheSync(stop, crInformer.HasSynced, w.JobInformer.Informer().HasSynced) {
