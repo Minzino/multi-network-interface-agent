@@ -116,6 +116,8 @@ git checkout -b feature/node-based-clean-architecture
   - `deployments/helm/templates/rbac.yaml`
 - ✅ 마스터 노드 스케줄 허용: Job tolerations 추가(`control-plane`/`master` NoSchedule 허용)
 - ✅ 컨트롤러 로깅 강화: Reconcile/Job 생성/성공/실패/Watcher 이벤트 로그 출력
+- ✅ Job 수명 주기 개선: 성공/실패 즉시 Job 삭제(Controller가 즉시 정리) + TTL(기본 600s) 옵션
+- ✅ CR 삭제 이벤트 처리: Watcher DeleteFunc로 CR 삭제 시 해당 노드 Job 정리
 
 ### 6단계: 통합 테스트 및 검증 ✅
 **목표**: 전체 플로우 검증
@@ -186,3 +188,10 @@ docs/SESSION_PROGRESS.md를 확인하고 MultiNIC Agent 점진적 개선의 2단
 - Job: 컨트롤러가 런타임 생성 (Helm은 Job 설치 안 함)
 - Worker 노드: Job Running → 네트워크 적용 성공 로그 확인
 - Master 노드: tolerations 반영 후 스케줄 가능
+
+## 🧭 배포/운영 주의사항
+- 네임스페이스 통일: 컨트롤러/CR은 `multinic-system`에 배포/생성
+- CRD: Helm 차트 `crds/` 포함(설치 시 자동 반영)
+- ServiceAccount 충돌 시(이미 수동 생성됨):
+  - Helm 값으로 `--set serviceAccount.create=false --set serviceAccount.name=multinic-agent` 지정
+- Helm은 Job을 설치하지 않음(`job.install=false`); 컨트롤러가 런타임 생성/정리
