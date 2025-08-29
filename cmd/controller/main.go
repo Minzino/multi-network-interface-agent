@@ -29,6 +29,7 @@ func main() {
     interval, _ := time.ParseDuration(getenv("POLL_INTERVAL", "15s"))
     saName := getenv("CONTROLLER_SA_NAME", getenv("SERVICE_ACCOUNT", "multinic-agent"))
     mode := getenv("CONTROLLER_MODE", "watch")
+    jobTTL := getenv("CONTROLLER_JOB_TTL", "600")
 
     c := &controller.Controller{
         Dyn:             dyn,
@@ -37,6 +38,10 @@ func main() {
         ImagePullPolicy: corev1.PullIfNotPresent,
         ServiceAccount:  saName,
         NodeCRNamespace: nodeCRNS,
+    }
+    if secs, err := time.ParseDuration(jobTTL+"s"); err == nil {
+        t := int32(secs / time.Second)
+        c.JobTTLSeconds = &t
     }
 
     if mode == "watch" {

@@ -101,6 +101,7 @@ git checkout -b feature/node-based-clean-architecture
 - ✅ `NODE_NAME <- spec.nodeName` 환경변수 우선 사용 (`cmd/agent/main.go`)
 - ✅ Helm Job 템플릿 추가 (`deployments/helm/templates/job.yaml`)
 - ✅ DS/Job에서 host-root 마운트 제거, OS별 필요한 경로만 사용
+- ✅ Job 단발 실행 모드 추가: `RUN_MODE=job`일 때 1회 처리 후 종료 (폴링 없음)
 
 ### 5단계: Controller 생성 🎛️
 **목표**: CRD 감시 및 Job 스케줄링 로직 구현
@@ -113,6 +114,8 @@ git checkout -b feature/node-based-clean-architecture
 - ✅ Helm Deployment/ RBAC 추가
   - `deployments/helm/templates/controller-deployment.yaml`
   - `deployments/helm/templates/rbac.yaml`
+- ✅ 마스터 노드 스케줄 허용: Job tolerations 추가(`control-plane`/`master` NoSchedule 허용)
+- ✅ 컨트롤러 로깅 강화: Reconcile/Job 생성/성공/실패/Watcher 이벤트 로그 출력
 
 ### 6단계: 통합 테스트 및 검증 ✅
 **목표**: 전체 플로우 검증
@@ -162,5 +165,24 @@ docs/SESSION_PROGRESS.md를 확인하고 MultiNIC Agent 점진적 개선의 2단
 
 ---
 
-**문서 최종 업데이트**: 2025-08-29 (5단계 완료)  
+**문서 최종 업데이트**: 2025-08-29 (5단계 완료, 개선 반영)  
 **다음 업데이트 예정**: 6단계(E2E) 완료 후
+
+## 🔁 실행/감시 모델 정리
+
+- 기본 모드: **Watcher(권장)**
+  - Controller가 CRD(MultiNicNodeConfig)를 Informer로 감시(Add/Update/Delete)
+  - 사양(spec) 변경 시 해당 노드에만 Job 생성 → Agent Job이 단발 실행(RUN_MODE=job)으로 구성 적용
+  - Job 완료/실패 시 Controller가 CR `status.state`를 `Configured/Failed`로 갱신
+
+- 보조 모드: **Polling**
+  - 운영 환경 제약 등으로 Watch 사용이 어려울 때 `CONTROLLER_MODE=poll`로 주기 실행 가능
+  - 설계/기본값은 Watch이며, Poll은 fallback 수단
+
+## ✅ 실배포 검증(요약)
+
+- 컨트롤러: `multinic-system` 네임스페이스에서 Running (Deployment/Pod)
+- 샘플 CR: `deployments/crds/samples/` 적용 → 노드별 CR 생성
+- Job: 컨트롤러가 런타임 생성 (Helm은 Job 설치 안 함)
+- Worker 노드: Job Running → 네트워크 적용 성공 로그 확인
+- Master 노드: tolerations 반영 후 스케줄 가능

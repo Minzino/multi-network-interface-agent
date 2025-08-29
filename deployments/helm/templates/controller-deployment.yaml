@@ -42,6 +42,8 @@ spec:
           value: "{{ .Values.controller.pollInterval }}"
         - name: CONTROLLER_SA_NAME
           value: {{ include "multinic-agent.serviceAccountName" . }}
+        - name: CONTROLLER_JOB_TTL
+          value: "{{ .Values.controller.jobTTLSeconds }}"
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
 {{- end }}

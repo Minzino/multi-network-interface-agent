@@ -102,3 +102,4 @@ daemonset:
 controller:
   enabled: true
   pollInterval: "15s"
+  jobTTLSeconds: "600"

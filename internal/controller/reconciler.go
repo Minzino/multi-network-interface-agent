@@ -132,18 +132,23 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         if err != nil { continue }
 
         // Determine completion state
+        currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
         if job.Status.Succeeded > 0 {
-            log.Printf("job succeeded: %s/%s", namespace, job.Name)
-            _ = c.updateCRStatus(ctx, u, map[string]any{
-                "state": "Configured",
-                "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
-            })
+            if currentState != "Configured" {
+                log.Printf("job succeeded: %s/%s", namespace, job.Name)
+                _ = c.updateCRStatus(ctx, u, map[string]any{
+                    "state": "Configured",
+                    "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
+                })
+            }
         } else if job.Status.Failed > 0 {
-            log.Printf("job failed: %s/%s", namespace, job.Name)
-            _ = c.updateCRStatus(ctx, u, map[string]any{
-                "state": "Failed",
-                "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
-            })
+            if currentState != "Failed" {
+                log.Printf("job failed: %s/%s", namespace, job.Name)
+                _ = c.updateCRStatus(ctx, u, map[string]any{
+                    "state": "Failed",
+                    "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
+                })
+            }
         }
     }
     return nil
