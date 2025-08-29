@@ -39,13 +39,13 @@ spec:
                 - nodeName
                 - interfaces
               properties:
-              nodeName:
-                type: string
-                description: Kubernetes node name this config targets
-              instanceId:
-                type: string
-                description: OpenStack Instance UUID (equals Node SystemUUID)
-              interfaces:
+                nodeName:
+                  type: string
+                  description: Kubernetes node name this config targets
+                instanceId:
+                  type: string
+                  description: OpenStack Instance UUID (equals Node SystemUUID)
+                interfaces:
                 type: array
                 description: Interfaces to configure on the node
                 minItems: 1
