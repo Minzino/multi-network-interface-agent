@@ -20,6 +20,10 @@ agent:
   pollInterval: "30s"
   # 로그 레벨
   logLevel: "info"
+  # 데이터 소스: db | nodecr
+  dataSource: "db"
+  # nodecr 사용 시 조회할 네임스페이스
+  nodeCRNamespace: "multinic-system"
   # 동시 처리할 최대 인터페이스 수 (병렬 처리)
   # - 더 많은 인터페이스를 동시에 처리하려면 이 값을 늘리세요
   # - 시스템 리소스를 고려하여 적절한 값을 설정하세요
@@ -81,3 +85,14 @@ securityContext:
     add:
       - NET_ADMIN
       - SYS_ADMIN
+
+# Job 실행 모드 설정
+job:
+  enabled: false
+  # 완료된 Job의 TTL (초), 필요 없으면 주석 처리
+  ttlSecondsAfterFinished: 600
+
+# 컨트롤러 설정
+controller:
+  enabled: true
+  pollInterval: "15s"

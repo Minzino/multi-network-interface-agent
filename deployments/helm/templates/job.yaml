@@ -1,14 +1,14 @@
-{{- if not .Values.job.enabled }}
-apiVersion: apps/v1
-kind: DaemonSet
+{{- if .Values.job.enabled }}
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: {{ include "multinic-agent.fullname" . }}
   labels:
     {{- include "multinic-agent.labels" . | nindent 4 }}
 spec:
-  selector:
-    matchLabels:
-      {{- include "multinic-agent.selectorLabels" . | nindent 6 }}
+  {{- if .Values.job.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  {{- end }}
   template:
     metadata:
       labels:
@@ -17,6 +17,7 @@ spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "multinic-agent.serviceAccountName" . }}
       {{- end }}
+      restartPolicy: OnFailure
       hostNetwork: true
       hostPID: true
       containers:
@@ -28,6 +29,10 @@ spec:
           value: "{{ .Values.agent.dataSource }}"
         - name: NODE_CR_NAMESPACE
           value: "{{ .Values.agent.nodeCRNamespace }}"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         - name: DB_HOST
           value: "{{ .Values.database.host }}"
         - name: DB_PORT
@@ -45,10 +50,6 @@ spec:
           value: "{{ .Values.agent.pollInterval }}"
         - name: LOG_LEVEL
           value: "{{ .Values.agent.logLevel }}"
-        - name: NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
         - name: HEALTH_PORT
           value: "8080"
         - name: MAX_CONCURRENT_TASKS

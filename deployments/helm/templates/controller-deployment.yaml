@@ -1,0 +1,47 @@
+{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "multinic-agent.fullname" . }}-controller
+  labels:
+    {{- include "multinic-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "multinic-agent.name" . }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "multinic-agent.name" . }}
+        app.kubernetes.io/component: controller
+        {{- include "multinic-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "multinic-agent.serviceAccountName" . }}
+      {{- end }}
+      containers:
+      - name: controller
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["./multinic-controller"]
+        env:
+        - name: CONTROLLER_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONTROLLER_MODE
+          value: "watch"
+        - name: NODE_CR_NAMESPACE
+          value: "{{ .Values.agent.nodeCRNamespace }}"
+        - name: AGENT_IMAGE
+          value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        - name: POLL_INTERVAL
+          value: "{{ .Values.controller.pollInterval }}"
+        - name: CONTROLLER_SA_NAME
+          value: {{ include "multinic-agent.serviceAccountName" . }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+{{- end }}

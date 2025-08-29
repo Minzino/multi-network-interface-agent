@@ -1,18 +1,23 @@
 package container
 
 import (
-	"database/sql"
-	"multinic-agent/internal/application/usecases"
-	"multinic-agent/internal/domain/interfaces"
-	"multinic-agent/internal/domain/services"
-	"multinic-agent/internal/infrastructure/adapters"
-	"multinic-agent/internal/infrastructure/config"
-	"multinic-agent/internal/infrastructure/health"
-	"multinic-agent/internal/infrastructure/network"
-	"multinic-agent/internal/infrastructure/persistence"
+    "database/sql"
+    "fmt"
+    "multinic-agent/internal/application/usecases"
+    "multinic-agent/internal/domain/interfaces"
+    "multinic-agent/internal/domain/services"
+    "multinic-agent/internal/infrastructure/adapters"
+    "multinic-agent/internal/infrastructure/config"
+    "multinic-agent/internal/infrastructure/health"
+    "multinic-agent/internal/infrastructure/network"
+    "multinic-agent/internal/infrastructure/persistence"
+    "os"
 
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/sirupsen/logrus"
+    _ "github.com/go-sql-driver/mysql"
+    "github.com/sirupsen/logrus"
+    dynamicclient "k8s.io/client-go/dynamic"
+    "k8s.io/client-go/rest"
+    "k8s.io/client-go/tools/clientcmd"
 )
 
 // Container는 의존성 주입을 관리하는 컨테이너입니다
@@ -66,18 +71,54 @@ func NewContainer(cfg *config.Config, logger *logrus.Logger) (*Container, error)
 
 // initializeInfrastructure는 인프라스트럭처 컴포넌트들을 초기화합니다
 func (c *Container) initializeInfrastructure() error {
-	// 기본 어댑터들 초기화
-	c.fileSystem = adapters.NewRealFileSystem()
-	c.commandExecutor = adapters.NewRealCommandExecutor()
-	c.clock = adapters.NewRealClock()
-	c.osDetector = adapters.NewRealOSDetector(c.fileSystem)
+    // 기본 어댑터들 초기화
+    c.fileSystem = adapters.NewRealFileSystem()
+    c.commandExecutor = adapters.NewRealCommandExecutor()
+    c.clock = adapters.NewRealClock()
+    // Prepare Kubernetes dynamic client (used for OS detection and NodeCR source)
+    var dyn dynamicclient.Interface
+    {
+        // Try in-cluster, fallback to KUBECONFIG
+        if cfg, err := rest.InClusterConfig(); err == nil {
+            if d, err := dynamicclient.NewForConfig(cfg); err == nil {
+                dyn = d
+            }
+        }
+        if dyn == nil {
+            kubeconfig := os.Getenv("KUBECONFIG")
+            if kubeconfig != "" {
+                if cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig); err == nil {
+                    if d, err := dynamicclient.NewForConfig(cfg); err == nil {
+                        dyn = d
+                    }
+                }
+            }
+        }
+    }
 
-	// 데이터베이스 연결
-	dsn := c.buildDSN()
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return err
-	}
+    if dyn != nil {
+        c.osDetector = adapters.NewK8sOSDetector(dyn)
+    } else {
+        // Fallback (legacy) - requires host-root mount
+        c.osDetector = adapters.NewRealOSDetector(c.fileSystem)
+    }
+
+    // 데이터 소스가 nodecr인 경우, DB 초기화 없이 NodeCR 레포지토리 사용
+    if c.config.Agent.DataSource == "nodecr" {
+        if dyn == nil {
+            return fmt.Errorf("kubernetes client not available for nodecr data source")
+        }
+        src := persistence.NewK8sNodeConfigSource(dyn, c.config.Agent.NodeCRNamespace)
+        c.repository = persistence.NewNodeCRRepository(src, c.logger)
+        return nil
+    }
+
+    // 데이터베이스 연결
+    dsn := c.buildDSN()
+    db, err := sql.Open("mysql", dsn)
+    if err != nil {
+        return err
+    }
 
 	// 연결 풀 설정
 	db.SetMaxOpenConns(c.config.Database.MaxOpenConns)
@@ -91,10 +132,10 @@ func (c *Container) initializeInfrastructure() error {
 
 	c.db = db
 
-	// 레포지토리 초기화
-	c.repository = persistence.NewMySQLRepository(c.db, c.logger)
+    // 레포지토리 초기화
+    c.repository = persistence.NewMySQLRepository(c.db, c.logger)
 
-	return nil
+    return nil
 }
 
 // initializeServices는 서비스들을 초기화합니다

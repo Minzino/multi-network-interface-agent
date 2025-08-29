@@ -8,7 +8,8 @@ RUN go mod download
 # 소스 코드 복사 (관련 디렉토리만 명시하여 캐시 효율성 증대)
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
-RUN go build -o multinic-agent cmd/agent/main.go
+RUN go build -o multinic-agent cmd/agent/main.go \
+ && go build -o multinic-controller cmd/controller/main.go
 
 # 실행 스테이지
 FROM alpine:3.18
@@ -20,5 +21,6 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 COPY --from=builder /app/multinic-agent .
+COPY --from=builder /app/multinic-controller .
 
 ENTRYPOINT ["./multinic-agent"]

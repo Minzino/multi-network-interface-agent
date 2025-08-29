@@ -1,14 +1,14 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
-	"time"
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "strings"
+    "syscall"
+    "time"
 
 	"multinic-agent/internal/application/polling"
 	"multinic-agent/internal/application/usecases"
@@ -188,27 +188,13 @@ func (a *Application) startHealthServer(port string) error {
 
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
 func (a *Application) processNetworkConfigurations(ctx context.Context) error {
-	startTime := time.Now()
+    startTime := time.Now()
 
-	// 호스트네임 가져오기
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-
-	// .novalocal 또는 다른 도메인 접미사 제거
-	originalHostname := hostname
-	if idx := strings.Index(hostname, "."); idx != -1 {
-		hostname = hostname[:idx]
-	}
-
-	// 호스트명 변경사항 디버그 로그
-	if originalHostname != hostname {
-		a.logger.WithFields(logrus.Fields{
-			"original_hostname": originalHostname,
-			"cleaned_hostname":  hostname,
-		}).Debug("Hostname domain suffix removed")
-	}
+    // 노드 이름 결정: NODE_NAME(env) -> cleaned hostname
+    hostname, err := resolveNodeName(a.logger)
+    if err != nil {
+        return err
+    }
 
 	// 1. 네트워크 설정 유스케이스 실행 (생성/수정)
 	configInput := usecases.ConfigureNetworkInput{
@@ -300,5 +286,36 @@ func (s *fixedIntervalStrategy) NextInterval(success bool) time.Duration {
 }
 
 func (s *fixedIntervalStrategy) Reset() {
-	// 고정 간격이므로 리셋할 것이 없음
+    // 고정 간격이므로 리셋할 것이 없음
+}
+
+// resolveNodeName은 환경변수 NODE_NAME(Downward API의 spec.nodeName 주입)을 우선 사용하고,
+// 없으면 os.Hostname()에서 도메인 접미사를 제거해 반환합니다.
+func resolveNodeName(logger *logrus.Logger) (string, error) {
+    if v := os.Getenv("NODE_NAME"); strings.TrimSpace(v) != "" {
+        return v, nil
+    }
+    // 보조 키도 확인 (환경에 따라 이름이 다를 수 있음)
+    if v := os.Getenv("MY_NODE_NAME"); strings.TrimSpace(v) != "" {
+        return v, nil
+    }
+    hn, err := os.Hostname()
+    if err != nil {
+        return "", err
+    }
+    cleaned := cleanHostnameDomainSuffix(hn)
+    if hn != cleaned {
+        logger.WithFields(logrus.Fields{
+            "original_hostname": hn,
+            "cleaned_hostname":  cleaned,
+        }).Debug("Hostname domain suffix removed")
+    }
+    return cleaned, nil
+}
+
+func cleanHostnameDomainSuffix(h string) string {
+    if idx := strings.Index(h, "."); idx != -1 {
+        return h[:idx]
+    }
+    return h
 }

@@ -29,13 +29,15 @@ type DatabaseConfig struct {
 
 // AgentConfig is a struct that holds agent configuration
 type AgentConfig struct {
-	PollInterval       time.Duration
-	MaxRetries         int
-	RetryDelay         time.Duration
-	CommandTimeout     time.Duration
-	BackupDirectory    string
-	Backoff            BackoffConfig
-	MaxConcurrentTasks int // 동시에 처리할 최대 인터페이스 수
+    PollInterval       time.Duration
+    MaxRetries         int
+    RetryDelay         time.Duration
+    CommandTimeout     time.Duration
+    BackupDirectory    string
+    Backoff            BackoffConfig
+    MaxConcurrentTasks int // 동시에 처리할 최대 인터페이스 수
+    DataSource         string // 데이터 소스 선택: "db" | "nodecr"
+    NodeCRNamespace    string // nodecr 선택 시, 조회할 네임스페이스 (기본: multinic-system)
 }
 
 // BackoffConfig is a struct that holds backoff configuration
@@ -65,8 +67,8 @@ func NewEnvironmentConfigLoader() ConfigLoader {
 
 // Load loads configuration from environment variables
 func (l *EnvironmentConfigLoader) Load() (*Config, error) {
-	config := &Config{
-		Database: DatabaseConfig{
+    config := &Config{
+        Database: DatabaseConfig{
 			Host:         getEnvOrDefault("DB_HOST", constants.DefaultDBHost),
 			Port:         getEnvOrDefault("DB_PORT", constants.DefaultDBPort),
 			User:         getEnvOrDefault("DB_USER", "root"), // TODO: 기본값 제거, 환경변수 필수로 변경
@@ -75,24 +77,26 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
 			MaxOpenConns: getEnvIntOrDefault("DB_MAX_OPEN_CONNS", 10),
 			MaxIdleConns: getEnvIntOrDefault("DB_MAX_IDLE_CONNS", 5),
 			MaxLifetime:  getEnvDurationOrDefault("DB_MAX_LIFETIME", 5*time.Minute),
-		},
-		Agent: AgentConfig{
-			PollInterval:       getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second),
-			MaxRetries:         getEnvIntOrDefault("MAX_RETRIES", 3),
-			RetryDelay:         getEnvDurationOrDefault("RETRY_DELAY", 2*time.Second),
-			CommandTimeout:     getEnvDurationOrDefault("COMMAND_TIMEOUT", 30*time.Second),
-			BackupDirectory:    getEnvOrDefault("BACKUP_DIR", constants.DefaultBackupDir),
-			MaxConcurrentTasks: getEnvIntOrDefault("MAX_CONCURRENT_TASKS", 5),
-			Backoff: BackoffConfig{
-				Enabled:     getEnvBoolOrDefault("BACKOFF_ENABLED", true),
-				MaxInterval: getEnvDurationOrDefault("BACKOFF_MAX_INTERVAL", getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second)*10),
-				Multiplier:  getEnvFloatOrDefault("BACKOFF_MULTIPLIER", 2.0),
-			},
-		},
-		Health: HealthConfig{
-			Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
-		},
-	}
+        },
+        Agent: AgentConfig{
+            PollInterval:       getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second),
+            MaxRetries:         getEnvIntOrDefault("MAX_RETRIES", 3),
+            RetryDelay:         getEnvDurationOrDefault("RETRY_DELAY", 2*time.Second),
+            CommandTimeout:     getEnvDurationOrDefault("COMMAND_TIMEOUT", 30*time.Second),
+            BackupDirectory:    getEnvOrDefault("BACKUP_DIR", constants.DefaultBackupDir),
+            MaxConcurrentTasks: getEnvIntOrDefault("MAX_CONCURRENT_TASKS", 5),
+            Backoff: BackoffConfig{
+                Enabled:     getEnvBoolOrDefault("BACKOFF_ENABLED", true),
+                MaxInterval: getEnvDurationOrDefault("BACKOFF_MAX_INTERVAL", getEnvDurationOrDefault("POLL_INTERVAL", 30*time.Second)*10),
+                Multiplier:  getEnvFloatOrDefault("BACKOFF_MULTIPLIER", 2.0),
+            },
+            DataSource:      getEnvOrDefault("DATA_SOURCE", "db"),
+            NodeCRNamespace: getEnvOrDefault("NODE_CR_NAMESPACE", "multinic-system"),
+        },
+        Health: HealthConfig{
+            Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
+        },
+    }
 
 	// Validate configuration
 	if err := l.validate(config); err != nil {
@@ -104,19 +108,27 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
 
 // validate validates the configuration
 func (l *EnvironmentConfigLoader) validate(config *Config) error {
-	// Validate database configuration
-	if config.Database.Host == "" {
-		return errors.NewValidationError("database host not configured", nil)
-	}
-	if config.Database.Port == "" {
-		return errors.NewValidationError("database port not configured", nil)
-	}
-	if config.Database.User == "" {
-		return errors.NewValidationError("database user not configured", nil)
-	}
-	if config.Database.Database == "" {
-		return errors.NewValidationError("database name not configured", nil)
-	}
+    // Default to db if not specified
+    dataSource := config.Agent.DataSource
+    if dataSource == "" {
+        dataSource = "db"
+    }
+    // Validate data source specific settings
+    if dataSource == "db" {
+        // Validate database configuration
+        if config.Database.Host == "" {
+            return errors.NewValidationError("database host not configured", nil)
+        }
+        if config.Database.Port == "" {
+            return errors.NewValidationError("database port not configured", nil)
+        }
+        if config.Database.User == "" {
+            return errors.NewValidationError("database user not configured", nil)
+        }
+        if config.Database.Database == "" {
+            return errors.NewValidationError("database name not configured", nil)
+        }
+    }
 
 	// Validate agent configuration
 	if config.Agent.PollInterval <= 0 {
