@@ -37,8 +37,11 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     if nodeName == "" {
         nodeName = u.GetName()
     }
-    // optional instance-id verification via label
-    instanceID := u.GetLabels()["multinic.io/instance-id"]
+    // instance-id verification via spec.instanceId or label
+    instanceID := nestedString(u, "spec", "instanceId")
+    if instanceID == "" {
+        instanceID = u.GetLabels()["multinic.io/instance-id"]
+    }
 
     node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil {
@@ -47,8 +50,8 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
 
     // Verify mapping if label provided
     if instanceID != "" {
-        sysUUID := strings.ToLower(node.Status.NodeInfo.SystemUUID)
-        if strings.ToLower(instanceID) != sysUUID {
+        sysUUID := normalizeUUID(node.Status.NodeInfo.SystemUUID)
+        if normalizeUUID(instanceID) != sysUUID {
             return fmt.Errorf("instance-id mismatch: cr=%s node=%s", instanceID, node.Status.NodeInfo.SystemUUID)
         }
     }
@@ -90,6 +93,11 @@ func nestedString(u *unstructured.Unstructured, fields ...string) string {
         return ""
     }
     return v
+}
+
+func normalizeUUID(s string) string {
+    // lower-case trim spaces; keep hyphens for consistent comparison
+    return strings.ToLower(strings.TrimSpace(s))
 }
 
 // ProcessAll lists all MultiNicNodeConfig in namespace and reconciles them

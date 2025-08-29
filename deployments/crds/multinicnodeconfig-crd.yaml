@@ -38,14 +38,17 @@ spec:
               required:
                 - nodeName
                 - interfaces
-              properties:
-                nodeName:
-                  type: string
-                  description: Kubernetes node name this config targets
-                interfaces:
-                  type: array
-                  description: Interfaces to configure on the node
-                  minItems: 1
+            properties:
+              nodeName:
+                type: string
+                description: Kubernetes node name this config targets
+              instanceId:
+                type: string
+                description: OpenStack Instance UUID (equals Node SystemUUID)
+              interfaces:
+                type: array
+                description: Interfaces to configure on the node
+                minItems: 1
                   items:
                     type: object
                     required:
@@ -128,4 +131,3 @@ spec:
                         format: date-time
                       message:
                         type: string
-

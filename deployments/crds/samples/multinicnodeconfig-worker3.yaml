@@ -5,8 +5,10 @@ metadata:
   namespace: multinic-system
   labels:
     multinic.io/node-name: viola2-biz-worker03
+    multinic.io/instance-id: d4defd76-faa9-4ae1-a228-13f90505f3d3
 spec:
   nodeName: viola2-biz-worker03
+  instanceId: d4defd76-faa9-4ae1-a228-13f90505f3d3
   interfaces:
     - id: 1
       macAddress: "fa:16:3e:c9:e4:ba"
