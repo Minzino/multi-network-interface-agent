@@ -102,6 +102,7 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                             Image:           p.Image,
                             ImagePullPolicy: p.PullPolicy,
                             Env: []corev1.EnvVar{
+                                {Name: "RUN_MODE", Value: "job"},
                                 {Name: "DATA_SOURCE", Value: "nodecr"},
                                 {Name: "NODE_CR_NAMESPACE", Value: p.NodeCRNamespace},
                                 {Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
@@ -116,6 +117,18 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                         },
                     },
                     Volumes: volumes,
+                    Tolerations: []corev1.Toleration{
+                        {
+                            Key:      "node-role.kubernetes.io/control-plane",
+                            Operator: corev1.TolerationOpExists,
+                            Effect:   corev1.TaintEffectNoSchedule,
+                        },
+                        {
+                            Key:      "node-role.kubernetes.io/master",
+                            Operator: corev1.TolerationOpExists,
+                            Effect:   corev1.TaintEffectNoSchedule,
+                        },
+                    },
                 },
             },
         },

@@ -26,6 +26,17 @@ func TestBuildAgentJob_Ubuntu_MountsNetplanOnly(t *testing.T) {
     if len(vols) != 1 || vols[0].HostPath == nil || vols[0].HostPath.Path != "/etc/netplan" {
         t.Fatalf("expected one netplan volume; got %#v", vols)
     }
+    // tolerations for master/control-plane
+    tols := job.Spec.Template.Spec.Tolerations
+    if len(tols) < 2 {
+        t.Fatalf("expected tolerations for control-plane/master taints")
+    }
+    // RUN_MODE=job env present
+    foundRunMode := false
+    for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+        if e.Name == "RUN_MODE" && e.Value == "job" { foundRunMode = true }
+    }
+    if !foundRunMode { t.Fatalf("expected RUN_MODE=job env") }
 }
 
 func TestBuildAgentJob_RHEL_MountsNMOnly(t *testing.T) {
@@ -61,4 +72,3 @@ func assertJobBasics(t *testing.T, job *batchv1.Job) {
         t.Fatalf("expected nodeSelector set")
     }
 }
-

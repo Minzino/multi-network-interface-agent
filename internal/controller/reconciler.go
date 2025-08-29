@@ -11,6 +11,7 @@ import (
     "k8s.io/apimachinery/pkg/runtime/schema"
     "k8s.io/client-go/dynamic"
     "k8s.io/client-go/kubernetes"
+    "log"
 )
 
 // Controller reconciles MultiNicNodeConfig into Jobs per node
@@ -28,8 +29,10 @@ var nodeCRGVR = schema.GroupVersionResource{Group: "multinic.io", Version: "v1al
 
 // Reconcile ensures a Job exists targeting the node specified by the MultiNicNodeConfig
 func (c *Controller) Reconcile(ctx context.Context, namespace, name string) error {
+    log.Printf("reconcile: ns=%s name=%s", namespace, name)
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
     if err != nil {
+        log.Printf("reconcile get CR error: %v", err)
         return err
     }
 
@@ -79,11 +82,14 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
 
     // Upsert: if exists, return nil; else create
     if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
+        log.Printf("job already exists: %s/%s", namespace, job.Name)
         return nil
     }
     if _, err := c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+        log.Printf("create job error: %v", err)
         return err
     }
+    log.Printf("job created: %s/%s for node=%s osImage=%s", namespace, job.Name, nodeName, osImage)
     return nil
 }
 
@@ -106,6 +112,7 @@ func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
     if err != nil { return err }
     for i := range list.Items {
         name := list.Items[i].GetName()
+        log.Printf("processAll reconcile: %s/%s", namespace, name)
         if err := c.Reconcile(ctx, namespace, name); err != nil {
             return err
         }
@@ -126,11 +133,13 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
 
         // Determine completion state
         if job.Status.Succeeded > 0 {
+            log.Printf("job succeeded: %s/%s", namespace, job.Name)
             _ = c.updateCRStatus(ctx, u, map[string]any{
                 "state": "Configured",
                 "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
             })
         } else if job.Status.Failed > 0 {
+            log.Printf("job failed: %s/%s", namespace, job.Name)
             _ = c.updateCRStatus(ctx, u, map[string]any{
                 "state": "Failed",
                 "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },

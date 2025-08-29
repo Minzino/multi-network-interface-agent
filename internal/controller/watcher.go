@@ -7,6 +7,7 @@ import (
     informers "k8s.io/client-go/informers"
     "k8s.io/client-go/dynamic/dynamicinformer"
     "k8s.io/client-go/tools/cache"
+    "log"
 )
 
 // Watcher wires informers to the Controller reconcile functions
@@ -35,15 +36,17 @@ func NewWatcher(ctrl *Controller, namespace string) *Watcher {
 // Start begins watching CRs and Jobs and blocks until ctx is done
 func (w *Watcher) Start(ctx context.Context) error {
     crInformer := w.CRInformerFactory.ForResource(nodeCRGVR).Informer()
+    log.Printf("watcher starting for CRs and Jobs in ns=%s", w.Namespace)
 
     crInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-        AddFunc: func(obj interface{}) { w.handleCR(obj) },
-        UpdateFunc: func(oldObj, newObj interface{}) { w.handleCR(newObj) },
+        AddFunc: func(obj interface{}) { log.Printf("CR add event"); w.handleCR(obj) },
+        UpdateFunc: func(oldObj, newObj interface{}) { log.Printf("CR update event"); w.handleCR(newObj) },
     })
 
     w.JobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
         UpdateFunc: func(oldObj, newObj interface{}) {
             // On job status change, update CR statuses
+            log.Printf("Job update event - processing jobs")
             _ = w.Ctrl.ProcessJobs(context.Background(), w.Namespace)
         },
     })

@@ -87,7 +87,7 @@ func NewApplication(container *container.Container, logger *logrus.Logger) *Appl
 
 // Run은 애플리케이션을 실행합니다
 func (a *Application) Run() error {
-	cfg := a.container.GetConfig()
+    cfg := a.container.GetConfig()
 
 	// OS 타입 감지 및 Info 로그 출력
 	osDetector := a.container.GetOSDetector()
@@ -135,31 +135,31 @@ func (a *Application) Run() error {
 		a.logger.WithField("interval", cfg.Agent.PollInterval).Info("Fixed interval polling enabled")
 	}
 
-	// 폴링 컨트롤러 생성
-	pollingController := polling.NewPollingController(strategy, a.logger)
+    // RUN_MODE=job: 한 번 처리 후 종료
+    if cfg.Agent.RunMode == "job" {
+        a.logger.Info("MultiNIC agent started (run mode: job)")
+        if err := a.processNetworkConfigurations(ctx); err != nil {
+            a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
+            return err
+        }
+        return nil
+    }
 
-	a.logger.Info("MultiNIC agent started")
-
-	// 시그널 처리를 위한 goroutine
-	go func() {
-		<-sigChan
-		a.logger.Info("Received shutdown signal")
-		cancel()
-	}()
-
-	// 폴링 시작
-	return pollingController.Start(ctx, func(ctx context.Context) error {
-		err := a.processNetworkConfigurations(ctx)
-		if err != nil {
-			a.logger.WithError(err).Error("Failed to process network configurations")
-			a.container.GetHealthService().UpdateDBHealth(false, err)
-			metrics.SetDBConnectionStatus(false)
-			return err
-		}
-		a.container.GetHealthService().UpdateDBHealth(true, nil)
-		metrics.SetDBConnectionStatus(true)
-		return nil
-	})
+    // 서비스 모드: 폴링 컨트롤러 시작
+    pollingController := polling.NewPollingController(strategy, a.logger)
+    a.logger.Info("MultiNIC agent started")
+    go func() { <-sigChan; a.logger.Info("Received shutdown signal"); cancel() }()
+    return pollingController.Start(ctx, func(ctx context.Context) error {
+        if err := a.processNetworkConfigurations(ctx); err != nil {
+            a.logger.WithError(err).Error("Failed to process network configurations")
+            a.container.GetHealthService().UpdateDBHealth(false, err)
+            metrics.SetDBConnectionStatus(false)
+            return err
+        }
+        a.container.GetHealthService().UpdateDBHealth(true, nil)
+        metrics.SetDBConnectionStatus(true)
+        return nil
+    })
 }
 
 // startHealthServer는 헬스체크 서버를 시작합니다

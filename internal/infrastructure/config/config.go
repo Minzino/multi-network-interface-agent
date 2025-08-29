@@ -38,6 +38,7 @@ type AgentConfig struct {
     MaxConcurrentTasks int // 동시에 처리할 최대 인터페이스 수
     DataSource         string // 데이터 소스 선택: "db" | "nodecr"
     NodeCRNamespace    string // nodecr 선택 시, 조회할 네임스페이스 (기본: multinic-system)
+    RunMode            string // "service"(default) or "job"
 }
 
 // BackoffConfig is a struct that holds backoff configuration
@@ -92,6 +93,7 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
             },
             DataSource:      getEnvOrDefault("DATA_SOURCE", "db"),
             NodeCRNamespace: getEnvOrDefault("NODE_CR_NAMESPACE", "multinic-system"),
+            RunMode:         getEnvOrDefault("RUN_MODE", "service"),
         },
         Health: HealthConfig{
             Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
