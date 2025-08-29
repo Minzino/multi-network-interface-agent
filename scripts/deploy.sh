@@ -90,7 +90,7 @@ done
 # 임시 파일 정리
 rm -f ${TMP_IMAGE_FILE}
 
-# 5. Helm 차트 배포
+# 5. Helm 차트 배포 (CRD는 pre-install hook으로 자동 업데이트됨)
 echo -e "\n${BLUE}5. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \

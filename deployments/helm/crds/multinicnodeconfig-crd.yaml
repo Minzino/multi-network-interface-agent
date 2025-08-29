@@ -38,18 +38,18 @@ spec:
               required:
                 - nodeName
                 - interfaces
-              properties:
-                nodeName:
-                  type: string
-                  description: Kubernetes node name this config targets
-                instanceId:
-                  type: string
-                  description: OpenStack Instance UUID (equals Node SystemUUID)
-                interfaces:
-                  type: array
-                  description: Interfaces to configure on the node
-                  minItems: 1
-                  items:
+            properties:
+              nodeName:
+                type: string
+                description: Kubernetes node name this config targets
+              instanceId:
+                type: string
+                description: OpenStack Instance UUID (equals Node SystemUUID)
+              interfaces:
+                type: array
+                description: Interfaces to configure on the node
+                minItems: 1
+                items:
                     type: object
                     required:
                       - macAddress
@@ -119,16 +119,57 @@ spec:
                   items:
                     type: object
                     properties:
+                      interfaceIndex:
+                        type: integer
+                        format: int64
                       id:
                         type: integer
+                        format: int64
+                        description: Interface identifier
                       macAddress:
                         type: string
                         pattern: ^([0-9A-Fa-f]{2}[:]){5}([0-9A-Fa-f]{2})$
+                      address:
+                        type: string
+                        description: IPv4/IPv6 address
+                      cidr:
+                        type: string
+                        description: Address with prefix length
+                      mtu:
+                        type: integer
+                        format: int64
+                        description: MTU size
+                      interfaceName:
+                        type: string
+                        description: Generated interface name (multinicX)
                       status:
                         type: string
+                        description: Current status
+                      reason:
+                        type: string
+                        description: Reason for current status
+                      actualState:
+                        type: string
+                        description: Actual interface state from system
+                      lastUpdated:
+                        type: string
+                        format: date-time
+                      lastChecked:
+                        type: string
+                        format: date-time
                       lastConfigured:
                         type: string
                         format: date-time
                       message:
                         type: string
-
+                lastUpdated:
+                  type: string
+                  format: date-time
+                  description: Last time the status was updated
+                lastInterfaceCheck:
+                  type: string
+                  format: date-time
+                  description: Last time interface states were checked
+                nodeReady:
+                  type: boolean
+                  description: Whether the node is in Ready state

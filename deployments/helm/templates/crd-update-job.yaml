@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "multinic-agent.fullname" . }}-crd-update
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "multinic-agent.fullname" . }}-crd-update
+    spec:
+      serviceAccount: {{ include "multinic-agent.serviceAccountName" . }}
+      restartPolicy: Never
+      containers:
+      - name: crd-update
+        image: bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "🔧 MultiNIC Agent CRD 업데이트 시작..."
+          
+          # CRD 업데이트 적용
+          kubectl apply -f - <<'EOF'
+{{ .Files.Get "crds/multinicnodeconfig-crd.yaml" | indent 10 }}
+          EOF
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ CRD 업데이트 완료"
+            
+            # CRD가 완전히 적용될 때까지 잠시 대기
+            echo "⏳ CRD 적용 대기 중..."
+            sleep 5
+            
+            echo "📋 CRD 상태 확인:"
+            kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.metadata.name}: {.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.items.properties}' | grep -o '"[^"]*"' | head -10
+          else
+            echo "❌ CRD 업데이트 실패"
+            exit 1
+          fi
+      ttlSecondsAfterFinished: 120
