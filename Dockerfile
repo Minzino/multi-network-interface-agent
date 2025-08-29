@@ -1,8 +1,9 @@
 # 빌드 스테이지
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
+ENV GOTOOLCHAIN=auto
 RUN go mod download
 
 # 소스 코드 복사 (관련 디렉토리만 명시하여 캐시 효율성 증대)
