@@ -1,0 +1,134 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: multinicnodeconfigs.multinic.io
+spec:
+  group: multinic.io
+  scope: Namespaced
+  names:
+    plural: multinicnodeconfigs
+    singular: multinicnodeconfig
+    kind: MultiNicNodeConfig
+    shortNames:
+      - mnnc
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Node
+          type: string
+          jsonPath: .spec.nodeName
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Node-scoped configuration for MultiNIC Agent
+          properties:
+            spec:
+              type: object
+              description: Desired state for the target node
+              required:
+                - nodeName
+                - interfaces
+              properties:
+                nodeName:
+                  type: string
+                  description: Kubernetes node name this config targets
+                instanceId:
+                  type: string
+                  description: OpenStack Instance UUID (equals Node SystemUUID)
+                interfaces:
+                  type: array
+                  description: Interfaces to configure on the node
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      - macAddress
+                    properties:
+                      id:
+                        type: integer
+                        minimum: 0
+                        description: Optional interface order identifier
+                      portId:
+                        type: string
+                        description: External provider port identifier
+                      macAddress:
+                        type: string
+                        pattern: ^([0-9A-Fa-f]{2}[:]){5}([0-9A-Fa-f]{2})$
+                        description: MAC address of the target device
+                      address:
+                        type: string
+                        description: IPv4/IPv6 address
+                      cidr:
+                        type: string
+                        description: Address with prefix length (e.g. 192.168.1.10/24)
+                      mtu:
+                        type: integer
+                        minimum: 68
+                        maximum: 9000
+                        description: MTU size for the interface
+            status:
+              type: object
+              description: Current status reported/managed by controller
+              properties:
+                state:
+                  type: string
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Configured
+                    - Failed
+                observedGeneration:
+                  type: integer
+                  format: int64
+                observedSpecHash:
+                  type: string
+                lastProcessed:
+                  type: string
+                  format: date-time
+                lastJobName:
+                  type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                interfaceStatuses:
+                  type: array
+                  description: Per-interface configuration results
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      macAddress:
+                        type: string
+                        pattern: ^([0-9A-Fa-f]{2}[:]){5}([0-9A-Fa-f]{2})$
+                      status:
+                        type: string
+                      lastConfigured:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+

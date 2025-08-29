@@ -17,12 +17,7 @@ Kubernetes 네이티브 방식으로 노드별 다중 NIC를 구성합니다. Co
 
 ## 빠른 시작
 
-### 1) CRD 적용
-```bash
-kubectl apply -n multinic-system -f deployments/crds/multinicnodeconfig-crd.yaml
-```
-
-### 2) Helm 배포 (Controller + Job 모드)
+### 1) Helm 배포 (Controller + Job 모드)
 ```bash
 helm upgrade --install multinic deployments/helm -n multinic-system --create-namespace \
   --set controller.enabled=true \
@@ -34,7 +29,9 @@ helm upgrade --install multinic deployments/helm -n multinic-system --create-nam
   --set image.pullPolicy=IfNotPresent
 ```
 
-### 3) 샘플 CR 적용(viola2-biz-* 노드)
+※ Helm 3는 `deployments/helm/crds/*`의 CRD를 자동 설치합니다(업그레이드시 CRD 변경은 수동 적용 필요).
+
+### 2) 샘플 CR 적용(viola2-biz-* 노드)
 ```bash
 kubectl apply -n multinic-system -f deployments/crds/samples/
 ```
