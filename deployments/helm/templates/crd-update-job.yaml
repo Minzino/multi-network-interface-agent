@@ -14,15 +14,35 @@ spec:
     spec:
       serviceAccount: {{ include "multinic-agent.serviceAccountName" . }}
       restartPolicy: Never
+      volumes:
+      - name: crd-config
+        configMap:
+          name: {{ include "multinic-agent.fullname" . }}-crd
       containers:
       - name: crd-update
         image: bitnami/kubectl:latest
         imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: crd-config
+          mountPath: /crd
         command:
         - /bin/sh
         - -c
         - |
           echo "🔧 MultiNIC Agent CRD 업데이트 시작..."
+          
+          # CRD 파일 확인
+          if [ ! -f /crd/multinicnodeconfig-crd.yaml ]; then
+            echo "❌ CRD 파일을 찾을 수 없습니다: /crd/multinicnodeconfig-crd.yaml"
+            exit 1
+          fi
+          
+          echo "📋 CRD 파일 내용 검증 중..."
+          kubectl create --dry-run=client -f /crd/multinicnodeconfig-crd.yaml
+          if [ $? -ne 0 ]; then
+            echo "❌ CRD 파일 검증 실패"
+            exit 1
+          fi
           
           # CRD 존재 여부 확인
           if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
@@ -37,9 +57,7 @@ spec:
           fi
           
           # 새 CRD 적용
-          kubectl apply -f - <<'EOF'
-{{ .Files.Get "crds/multinicnodeconfig-crd.yaml" | indent 10 }}
-          EOF
+          kubectl apply -f /crd/multinicnodeconfig-crd.yaml
           
           if [ $? -eq 0 ]; then
             echo "✅ CRD 업데이트 완료"
