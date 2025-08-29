@@ -10,4 +10,4 @@ metadata:
     "helm.sh/hook-weight": "-25"
 data:
   multinicnodeconfig-crd.yaml: |
-{{ .Files.Get "crds/multinicnodeconfig-crd.yaml" | indent 4 }}
+{{ .Files.Get "files/crds/multinicnodeconfig-crd.yaml" | indent 4 }}
