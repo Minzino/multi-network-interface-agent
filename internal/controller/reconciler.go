@@ -43,6 +43,13 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         nodeName = u.GetName()
     }
     
+    // Check if CR is already in a final state (Configured/Failed)
+    currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
+    if currentState == "Configured" || currentState == "Failed" {
+        log.Printf("reconcile: CR %s/%s is already in final state '%s', skipping job creation", namespace, name, currentState)
+        return nil
+    }
+    
     // Log interface details
     c.logInterfaceDetails(u, nodeName)
     
@@ -377,10 +384,9 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
             "lastUpdated":  time.Now().Format(time.RFC3339),
         }
         
-        // Add interface name if we can determine it
-        if interfaceName := c.getInterfaceNameForMAC(macAddress); interfaceName != "" {
-            interfaceStatus["interfaceName"] = interfaceName
-        }
+        // Generate interface name based on index (multinic0, multinic1, etc.)
+        interfaceName := fmt.Sprintf("multinic%d", i)
+        interfaceStatus["interfaceName"] = interfaceName
         
         interfaceStatuses = append(interfaceStatuses, interfaceStatus)
         
@@ -403,7 +409,8 @@ func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
     
     // In practice, the Agent will create interfaces as multinic0, multinic1, etc.
     // We could enhance this by storing the mapping in the CR status or elsewhere
-    return fmt.Sprintf("multinic%s", macAddress[len(macAddress)-1:]) // Simple fallback
+    // For now, return empty string - the actual interface name will be determined by the Agent
+    return ""
 }
 
 // updateInterfaceStates periodically updates the interface states in the CR status 
