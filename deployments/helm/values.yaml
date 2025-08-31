@@ -1,53 +1,12 @@
-# 기본 값
-replicaCount: 1
-
 image:
   repository: multinic-agent
   pullPolicy: IfNotPresent
   tag: "1.0.0"
 
-# 데이터베이스 설정
-database:
-  host: "192.168.34.79"
-  port: "30305"
-  user: "root"
-  password: "secret"
-  name: "multinic"
-
-# 에이전트 설정
+# 에이전트/CR 데이터 소스 설정 (Controller가 생성하는 Job에서 사용)
 agent:
-  # 폴링 간격 (기본: 30초)
-  pollInterval: "30s"
-  # 로그 레벨
-  logLevel: "info"
-  # 데이터 소스: db | nodecr
-  dataSource: "nodecr"
-  # nodecr 사용 시 조회할 네임스페이스
+  # nodeCR 사용 시 조회할 네임스페이스
   nodeCRNamespace: "multinic-system"
-  # 동시 처리할 최대 인터페이스 수 (병렬 처리)
-  # - 더 많은 인터페이스를 동시에 처리하려면 이 값을 늘리세요
-  # - 시스템 리소스를 고려하여 적절한 값을 설정하세요
-  maxConcurrentTasks: 5
-  # 폴링 백오프 설정 (선택사항)
-  # 지수 백오프(Exponential Backoff)란?
-  # - 실패 시 재시도 간격을 지수적으로 증가시켜 DB/네트워크 부하를 줄이는 기법
-  # - 예: 30s → 실패 → 60s → 실패 → 120s → 실패 → 240s...
-  # - 성공 시 즉시 기본 간격(pollInterval)으로 복귀
-  backoff:
-    # 백오프 활성화 여부 (기본: true)
-    # - true: 지능적 폴링 (권장)
-    # - false: 고정 간격 폴링
-    enabled: true
-    
-    # 최대 폴링 간격 (기본: pollInterval * 10)
-    # 장시간 장애 시에도 이 값 이상으로는 증가하지 않음
-    maxInterval: "300s"
-    
-    # 백오프 지수 (기본: 2.0)
-    # - 2.0: 매 실패마다 간격이 2배씩 증가 (30s → 60s → 120s...)
-    # - 1.5: 완만한 증가 (더 자주 재시도)
-    # - 3.0: 급격한 증가 (더 적게 재시도)
-    multiplier: 2.0
 
 # 리소스 제한
 resources:
@@ -58,7 +17,6 @@ resources:
     cpu: 100m
     memory: 128Mi
 
-# 노드 셀렉터 - K8s 클러스터에 조인된 노드만
 nodeSelector: {}
   # kubernetes.io/hostname: node1
 
@@ -78,30 +36,11 @@ serviceAccount:
   create: true
   name: ""
 
-# 보안 컨텍스트
-securityContext:
-  privileged: true  # 네트워크 설정을 위해 필요
-  capabilities:
-    add:
-      - NET_ADMIN
-      - SYS_ADMIN
-
-# Job 실행 모드 설정
-job:
-  # install: Helm이 샘플/수동 테스트 용도로 Job 리소스를 직접 생성할지 여부
-  # 기본은 false (컨트롤러가 필요 시 Job을 생성)
-  install: false
-  # 완료된 Job의 TTL (초), 필요 없으면 주석 처리
-  ttlSecondsAfterFinished: 600
-
-# DaemonSet 비활성화(Controller+Job 방식 사용)
-daemonset:
-  enabled: false
-
 # 컨트롤러 설정
 controller:
   enabled: true
-  pollInterval: "15s"
   jobTTLSeconds: "600"
+  # Job 삭제 지연(초): 종료 요약/로그 수집용으로 잠시 보존
+  jobDeleteDelaySeconds: "30"
   # Job 삭제 지연(초). 컨트롤러가 종료 메시지(실패 상세) 수집할 시간을 확보
   jobDeleteDelaySeconds: "30"

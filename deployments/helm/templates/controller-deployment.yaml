@@ -38,8 +38,6 @@ spec:
           value: "{{ .Values.agent.nodeCRNamespace }}"
         - name: AGENT_IMAGE
           value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-        - name: POLL_INTERVAL
-          value: "{{ .Values.controller.pollInterval }}"
         - name: CONTROLLER_SA_NAME
           value: {{ include "multinic-agent.serviceAccountName" . }}
         - name: CONTROLLER_JOB_TTL
