@@ -209,23 +209,40 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                         ErrorType string `json:"errorType"`
                         Reason    string `json:"reason"`
                     }
-                    var sum struct {
-                        Failures []failure `json:"failures"`
-                    }
+                    var sum struct { Failures []failure `json:"failures"` }
                     if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Failures) > 0 {
-                        // Build set of failed names for quick lookup
-                        failedSet := map[string]failure{}
-                        for _, f := range sum.Failures { failedSet[f.Name] = f }
-                        // Enumerate spec interfaces by index -> multinic{idx}
+                        // Build lookup maps by ID and MAC (normalized)
+                        failByID := map[int]failure{}
+                        failByMAC := map[string]failure{}
+                        for _, f := range sum.Failures {
+                            failByID[f.ID] = f
+                            if strings.TrimSpace(f.MAC) != "" {
+                                failByMAC[strings.ToLower(strings.TrimSpace(f.MAC))] = f
+                            }
+                        }
+                        // Enumerate spec interfaces and map by id/MAC (more reliable than name)
                         ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
                         if found {
                             for i := range ifaces {
+                                ifaceMap, _ := ifaces[i].(map[string]any)
                                 name := fmt.Sprintf("multinic%d", i)
-                                if f, ok := failedSet[name]; ok {
+                                id := getIntFromMap(ifaceMap, "id")
+                                mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
+                                if f, ok := failByID[id]; ok && id != 0 {
                                     statuses[name] = map[string]any{
                                         "interfaceIndex": int64(i),
                                         "id":            int64(f.ID),
-                                        "macAddress":    f.MAC,
+                                        "macAddress":    mac,
+                                        "status":        "Failed",
+                                        "reason":        "JobFailed",
+                                        "message":       f.Reason,
+                                        "lastUpdated":   time.Now().Format(time.RFC3339),
+                                    }
+                                } else if f, ok := failByMAC[mac]; ok && mac != "" {
+                                    statuses[name] = map[string]any{
+                                        "interfaceIndex": int64(i),
+                                        "id":            int64(f.ID),
+                                        "macAddress":    mac,
                                         "status":        "Failed",
                                         "reason":        "JobFailed",
                                         "message":       f.Reason,
@@ -235,13 +252,14 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                                     // Treat others as configured in a partial failure scenario
                                     statuses[name] = map[string]any{
                                         "interfaceIndex": int64(i),
+                                        "id":            int64(id),
+                                        "macAddress":    mac,
                                         "status":        "Configured",
                                         "reason":        "JobPartialSuccess",
                                         "lastUpdated":   time.Now().Format(time.RFC3339),
                                     }
                                 }
                             }
-                            // reflect partial failure in condition reason when some succeeded
                             if len(sum.Failures) < len(ifaces) { reason = "JobFailedPartial" }
                         }
                     }
