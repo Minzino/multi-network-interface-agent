@@ -2,6 +2,7 @@ package controller
 
 import (
     "context"
+    "crypto/sha256"
     "encoding/json"
     "fmt"
     "strings"
@@ -44,10 +45,14 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         nodeName = u.GetName()
     }
     
-    // Check if CR is already in a final state (Configured/Failed)
+    // Detect spec change using metadata.generation vs status.observedGeneration
     currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
-    if currentState == "Configured" || currentState == "Failed" {
-        log.Printf("reconcile: CR %s/%s is already in final state '%s', skipping job creation", namespace, name, currentState)
+    specGen := u.GetGeneration()
+    observedGen, _, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+    specChanged := observedGen == 0 || specGen != observedGen
+    // If already in final state and spec hasn't changed, skip scheduling
+    if (currentState == "Configured" || currentState == "Failed") && !specChanged {
+        log.Printf("reconcile: CR %s/%s is already in final state '%s' with no spec change, skipping job creation", namespace, name, currentState)
         return nil
     }
     
@@ -87,12 +92,17 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         Action:             "", // default apply
     })
 
-    // Mark CR as InProgress with interface details
-    interfaceStatuses := c.buildInterfaceStatuses(u, "InProgress", "JobScheduled")
+    // Mark CR as InProgress with interface details and record observedGeneration/spec hash
+    reason := "JobScheduled"
+    if specChanged { reason = "SpecChanged" }
+    interfaceStatuses := c.buildInterfaceStatuses(u, "InProgress", reason)
     _ = c.updateCRStatus(ctx, u, map[string]any{
-        "state": "InProgress",
+        "state":              "InProgress",
+        "observedGeneration": specGen,
+        "observedSpecHash":   computeSpecHash(u),
+        "lastJobName":        job.Name,
         "conditions": []any{
-            map[string]any{"type": "InProgress", "status": "True", "reason": "JobScheduled"},
+            map[string]any{"type": "InProgress", "status": "True", "reason": reason},
         },
         "interfaceStatuses": interfaceStatuses,
         "lastUpdated": time.Now().Format(time.RFC3339),
@@ -342,6 +352,20 @@ func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstruc
         }
     }
     return nil
+}
+
+// computeSpecHash creates a SHA256 hash of the CR .spec for change tracking
+func computeSpecHash(u *unstructured.Unstructured) string {
+    spec, found, _ := unstructured.NestedMap(u.Object, "spec")
+    if !found || spec == nil {
+        return ""
+    }
+    b, err := json.Marshal(spec)
+    if err != nil {
+        return ""
+    }
+    sum := sha256.Sum256(b)
+    return fmt.Sprintf("%x", sum)
 }
 
 // logInterfaceDetails logs detailed information about network interfaces from the CR
