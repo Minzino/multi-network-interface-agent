@@ -634,6 +634,12 @@ func (uc *ConfigureNetworkUseCase) checkRHELNeedProcessing(ctx context.Context, 
 		isDrifted = uc.isIfcfgDrifted(ctx, iface, configPath)
 	}
 
+	// 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
+	systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
+	if systemDrift {
+		isDrifted = true
+	}
+
 	// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
 	shouldProcess := !fileExists || isDrifted || iface.Status == entities.StatusPending
 	return shouldProcess, configPath
@@ -653,6 +659,13 @@ func (uc *ConfigureNetworkUseCase) checkNetplanNeedProcessing(ctx context.Contex
 	if fileExists {
 		isDrifted = uc.isDrifted(ctx, iface, configPath)
 	}
+
+	// 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
+	systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
+	if systemDrift {
+		isDrifted = true
+	}
+
 	shouldProcess := !fileExists || isDrifted || iface.Status == entities.StatusPending
 	return shouldProcess, configPath
 }
