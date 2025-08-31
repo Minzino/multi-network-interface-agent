@@ -115,6 +115,23 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	return matches[1], nil
 }
 
+// IsInterfaceUp은 특정 인터페이스가 UP 상태인지 확인합니다
+func (s *InterfaceNamingService) IsInterfaceUp(interfaceName string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// ip link show 명령어로 특정 인터페이스 정보 조회
+	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "link", "show", interfaceName)
+	if err != nil {
+		return false, fmt.Errorf("인터페이스 %s 상태 조회 실패: %w", interfaceName, err)
+	}
+
+	outputStr := string(output)
+	// UP, LOWER_UP 상태 확인 (예: "state UP" 또는 "<BROADCAST,MULTICAST,UP,LOWER_UP>")
+	return strings.Contains(outputStr, "state UP") || 
+		   (strings.Contains(outputStr, ",UP,") && strings.Contains(outputStr, "LOWER_UP")), nil
+}
+
 // ListNetplanFiles는 지정된 디렉토리의 netplan 파일 목록을 반환합니다
 func (s *InterfaceNamingService) ListNetplanFiles(dir string) ([]string, error) {
 	files, err := s.fileSystem.ListFiles(dir)

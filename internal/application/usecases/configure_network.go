@@ -282,6 +282,15 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 		return true
 	}
 
+	// 실제 시스템 인터페이스 검증 추가
+	interfaceName := uc.extractInterfaceNameFromPath(configPath)
+	if interfaceName != "" {
+		systemDrift := uc.checkSystemInterfaceDrift(ctx, dbIface, interfaceName)
+		if systemDrift {
+			return true
+		}
+	}
+
 	// 드리프트 체크
 	return uc.checkConfigDrift(dbIface, fileConfig)
 }
@@ -368,6 +377,77 @@ func (uc *ConfigureNetworkUseCase) checkConfigDrift(dbIface entities.NetworkInte
 	return isDrifted
 }
 
+// extractInterfaceNameFromPath는 설정 파일 경로에서 인터페이스 이름을 추출합니다
+func (uc *ConfigureNetworkUseCase) extractInterfaceNameFromPath(configPath string) string {
+	fileName := filepath.Base(configPath)
+	// netplan: "92-multinic0.yaml" -> "multinic0"
+	if strings.HasSuffix(fileName, ".yaml") && strings.Contains(fileName, "-") {
+		parts := strings.Split(strings.TrimSuffix(fileName, ".yaml"), "-")
+		if len(parts) >= 2 {
+			return parts[len(parts)-1] // 마지막 부분이 인터페이스 이름
+		}
+	}
+	// ifcfg: "ifcfg-multinic0" -> "multinic0"
+	if strings.HasPrefix(fileName, "ifcfg-") {
+		return strings.TrimPrefix(fileName, "ifcfg-")
+	}
+	return ""
+}
+
+// checkSystemInterfaceDrift는 CR 설정과 실제 시스템 인터페이스 상태를 비교합니다
+func (uc *ConfigureNetworkUseCase) checkSystemInterfaceDrift(ctx context.Context, dbIface entities.NetworkInterface, interfaceName string) bool {
+	// 실제 시스템에서 인터페이스 정보 조회
+	actualMAC, err := uc.namingService.GetMacAddressForInterface(interfaceName)
+	if err != nil {
+		// 인터페이스가 존재하지 않거나 조회 실패 시 드리프트로 간주
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"cr_mac":         dbIface.MacAddress,
+			"error":          err,
+		}).Warn("Failed to get actual interface MAC - system interface validation failed")
+		return true
+	}
+
+	// MAC 주소 비교 (대소문자 무관)
+	if strings.ToLower(actualMAC) != strings.ToLower(dbIface.MacAddress) {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"cr_mac":         dbIface.MacAddress,
+			"actual_mac":     actualMAC,
+		}).Error("CRITICAL: CR MAC address does not match actual system interface - blocking application")
+		return true
+	}
+
+	// 추가 검증: 인터페이스 상태 확인 (UP 상태면 위험함)
+	if uc.isInterfaceUp(ctx, interfaceName) {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"mac_address":    actualMAC,
+		}).Warn("Target interface is UP - potentially dangerous to modify")
+		// UP 상태 인터페이스도 드리프트로 간주하여 신중하게 처리
+		return true
+	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"interface_name": interfaceName,
+		"mac_address":    actualMAC,
+	}).Debug("System interface validation passed")
+	return false
+}
+
+// isInterfaceUp은 인터페이스가 UP 상태인지 확인합니다
+func (uc *ConfigureNetworkUseCase) isInterfaceUp(ctx context.Context, interfaceName string) bool {
+	isUp, err := uc.namingService.IsInterfaceUp(interfaceName)
+	if err != nil {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"error":          err,
+		}).Debug("Failed to check interface UP status, assuming safe to modify")
+		return false // 에러 시 안전하게 false 반환 (처리 허용)
+	}
+	return isUp
+}
+
 // findIfcfgFile는 해당 인터페이스의 ifcfg 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findIfcfgFile(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
@@ -399,6 +479,15 @@ func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface e
 			"file_mac": fileConfig.macAddress,
 		}).Warn("MAC address mismatch in ifcfg file")
 		return true
+	}
+
+	// 실제 시스템 인터페이스 검증 추가
+	interfaceName := uc.extractInterfaceNameFromPath(configPath)
+	if interfaceName != "" {
+		systemDrift := uc.checkSystemInterfaceDrift(ctx, dbIface, interfaceName)
+		if systemDrift {
+			return true
+		}
 	}
 
 	// 드리프트 체크
