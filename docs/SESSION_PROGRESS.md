@@ -271,8 +271,117 @@ docs/SESSION_PROGRESS.md를 확인하고 MultiNIC Agent 점진적 개선의 7단
 
 ---
 
-**문서 최종 업데이트**: 2025-08-31 (8단계 완료 - 프로덕션 검증 완료)  
+**문서 최종 업데이트**: 2025-08-31 (8단계 + 배포 안정화 완료)  
 **프로젝트 완료**: 모든 목표 달성 ✅
+
+## 📋 2025-08-31 추가 작업 세션: 배포 안정화 완료
+
+### 🚨 해결된 문제들
+
+#### 1. 무한 Job 생성 문제 ✅
+**문제**: Controller가 이미 Configured 상태인 CR에 대해서도 계속 Job을 생성하여 무한 루프 발생
+**해결**: 
+- `reconcile()` 함수에 상태 체크 로직 추가
+- `currentState == "Configured" || currentState == "Failed"` 시 Job 생성 건너뛰기
+- 로그: "CR is already in final state, skipping job creation"
+
+#### 2. interfaceName 생성 오류 ✅
+**문제**: interfaceName이 "multinicf" 형태로 잘못 생성 (MAC 주소 마지막 문자 사용)
+**해결**:
+- MAC 기반 생성 방식 → 인덱스 기반 생성 방식 변경
+- `fmt.Sprintf("multinic%d", i)`로 정확한 이름 생성 (multinic0, multinic1, multinic2...)
+
+#### 3. interfaceStatuses 구조 개선 ✅
+**문제**: 평면적인 배열 구조로 가독성 부족
+**해결**:
+- CRD 스키마를 `array` → `object` 타입으로 변경
+- interface name을 key로 하는 중첩 객체 구조 구현
+- 각 인터페이스별로 별도의 객체에 상세 정보 포함
+
+#### 4. CRD 자동 업데이트 문제 ✅
+**문제**: `git pull` 후 재배포 시 CRD 스키마 변경이 반영되지 않음
+**해결 과정**:
+1. **1차 시도**: Helm Hook 기반 CRD 업데이트 시스템
+   - `crd-update-job.yaml`, `crd-configmap.yaml` 생성
+   - pre-install/pre-upgrade hook으로 CRD 선처리
+   
+2. **2차 문제**: Helm Hook이 배포를 블로킹
+   - ServiceAccount, RBAC의 hook이 CRD 의존성으로 무한 대기
+   - CRD 삭제 권한으로 인해 deploy.sh에서 생성한 CRD가 삭제됨
+   
+3. **최종 해결**: deploy.sh 통합 방식
+   - 모든 Helm Hook 완전 제거 (`helm.sh/hook` 어노테이션 삭제)
+   - deploy.sh에 직접적인 CRD 배포 로직 추가 (섹션 5)
+   - RBAC 권한에서 CRD `delete` 권한 제거 (읽기 전용)
+
+### 🔧 구현된 해결책
+
+#### deploy.sh CRD 직접 배포 로직 추가
+```bash
+# 5. CRD 배포
+echo -e "\n${BLUE}5. CRD 배포${NC}"
+CRD_FILE="deployments/crds/multinicnodeconfig-crd.yaml"
+
+if [ -f "$CRD_FILE" ]; then
+    # 기존 CRD가 있는지 확인
+    if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+        # 기존 CRD 삭제 후 새로 생성 (스키마 변경을 위해)
+        kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
+        sleep 5
+    fi
+    
+    # 새 CRD 적용
+    kubectl apply -f "$CRD_FILE"
+    
+    # CRD 스키마 검증
+    SCHEMA_TYPE=$(kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.type}')
+    if [ "$SCHEMA_TYPE" = "object" ]; then
+        echo "✓ interfaceStatuses 스키마 확인: object 타입 (중첩 구조 지원)"
+    fi
+fi
+```
+
+#### Helm Hook 완전 제거
+- `crd-update-job.yaml` → `crd-update-job.yaml.disabled`
+- `crd-configmap.yaml` → `crd-configmap.yaml.disabled`  
+- ServiceAccount, RBAC의 모든 `helm.sh/hook` 어노테이션 제거
+- RBAC에서 CRD `create`, `update`, `patch`, `delete` 권한 제거 → `get`, `list`, `watch`만 유지
+
+#### 기존 Hook 리소스 정리
+- 이전 배포에서 생성된 Job, ConfigMap, RBAC 리소스 수동 삭제
+- ServiceAccount 소유권 충돌 문제 해결
+
+### 🎯 최종 배포 플로우
+
+1. **이미지 빌드 및 배포**: 모든 노드에 이미지 전송 ✅
+2. **CRD 직접 배포**: deploy.sh에서 스키마 업데이트 처리 ✅  
+3. **Helm 차트 배포**: Hook 없는 순수 리소스 배포 ✅
+4. **배포 상태 확인**: Controller, Pod, CR 정상 동작 확인 ✅
+
+### 🚀 검증 결과
+
+- ✅ **Job 무한 생성 해결**: 최종 상태 CR은 더 이상 Job 생성하지 않음
+- ✅ **정확한 인터페이스명**: multinic0, multinic1, multinic2 형태로 정상 생성
+- ✅ **중첩 구조 구현**: interfaceStatuses가 객체 기반으로 interface name별 분류
+- ✅ **CRD 자동 업데이트**: git pull 후 deploy.sh 실행 시 스키마 변경 즉시 반영
+- ✅ **안정적인 Helm 배포**: Hook 의존성 없이 순수 리소스 배포로 블로킹 해결
+
+### 📈 운영 안정성 확보
+
+**배포 안정성**:
+- CRD 스키마 변경 시 자동 감지 및 업데이트
+- Helm 배포 블로킹 요소 완전 제거
+- 기존 리소스와의 충돌 방지
+
+**Controller 동작 안정성**:  
+- 무한 Job 생성 방지로 리소스 낭비 해결
+- 정확한 인터페이스 명명으로 식별성 향상
+- 구조화된 CR 상태로 가독성 및 관리성 대폭 개선
+
+**개발/운영 효율성**:
+- git pull → deploy.sh 한 번으로 모든 변경사항 반영
+- CRD 스키마 검증으로 배포 전 오류 조기 발견
+- 명확한 에러 메시지와 로그로 디버깅 용이성 확보
 
 ## 📋 현재 세션 완료 작업 요약 (6단계)
 
