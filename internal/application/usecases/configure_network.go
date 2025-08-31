@@ -261,6 +261,58 @@ func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, if
         }
         return errors.NewNetworkError("MAC mismatch after apply", mismatch)
     }
+
+    // 3-3. MTU 일치 검증 (요청값이 있는 경우)
+    if iface.MTU > 0 {
+        actualMTU, mtuErr := uc.namingService.GetInterfaceMTU(interfaceName.String())
+        if mtuErr != nil {
+            if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+                return errors.NewNetworkError(
+                    fmt.Sprintf("MTU check failed and rollback also failed: %v", rollbackErr),
+                    mtuErr,
+                )
+            }
+            return errors.NewNetworkError("MTU check failed", mtuErr)
+        }
+        if actualMTU != iface.MTU {
+            mtuMismatch := fmt.Errorf("MTU mismatch after apply: cr=%d system=%d", iface.MTU, actualMTU)
+            if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+                return errors.NewNetworkError(
+                    fmt.Sprintf("MTU mismatch and rollback also failed: %v", rollbackErr),
+                    mtuMismatch,
+                )
+            }
+            return errors.NewNetworkError("MTU mismatch after apply", mtuMismatch)
+        }
+    }
+
+    // 3-4. IPv4 주소/프리픽스 일치 검증 (요청값이 있는 경우)
+    if strings.TrimSpace(iface.Address) != "" && strings.TrimSpace(iface.CIDR) != "" {
+        ipWithPrefix, ipErr := uc.namingService.GetIPv4WithPrefix(interfaceName.String())
+        if ipErr != nil {
+            if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+                return errors.NewNetworkError(
+                    fmt.Sprintf("IP check failed and rollback also failed: %v", rollbackErr),
+                    ipErr,
+                )
+            }
+            return errors.NewNetworkError("IP check failed", ipErr)
+        }
+        // expected like "address/prefix"
+        expectedPrefix := ""
+        if parts := strings.Split(iface.CIDR, "/"); len(parts) == 2 { expectedPrefix = parts[1] }
+        expected := fmt.Sprintf("%s/%s", iface.Address, expectedPrefix)
+        if ipWithPrefix != expected {
+            ipMismatch := fmt.Errorf("IP mismatch after apply: cr=%s system=%s", expected, ipWithPrefix)
+            if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+                return errors.NewNetworkError(
+                    fmt.Sprintf("IP mismatch and rollback also failed: %v", rollbackErr),
+                    ipMismatch,
+                )
+            }
+            return errors.NewNetworkError("IP mismatch after apply", ipMismatch)
+        }
+    }
     return nil
 }
 
