@@ -90,8 +90,60 @@ done
 # 임시 파일 정리
 rm -f ${TMP_IMAGE_FILE}
 
-# 5. Helm 차트 배포 (CRD는 pre-install hook으로 자동 업데이트됨)
-echo -e "\n${BLUE}5. Helm 차트 배포${NC}"
+# 5. CRD 배포
+echo -e "\n${BLUE}5. CRD 배포${NC}"
+CRD_FILE="deployments/crds/multinicnodeconfig-crd.yaml"
+
+if [ -f "$CRD_FILE" ]; then
+    echo -e "${YELLOW}CRD 적용 중...${NC}"
+    
+    # 기존 CRD가 있는지 확인
+    if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+        echo -e "${YELLOW}기존 CRD 발견 - 업데이트 모드${NC}"
+        
+        # 기존 CRD 삭제 후 새로 생성 (스키마 변경을 위해)
+        echo -e "${YELLOW}기존 CRD 삭제 중...${NC}"
+        kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
+        
+        echo -e "${YELLOW}CRD 삭제 완료, 5초 대기 중...${NC}"
+        sleep 5
+    fi
+    
+    # 새 CRD 적용
+    if kubectl apply -f "$CRD_FILE"; then
+        echo -e "${GREEN}✓ CRD 배포 완료${NC}"
+        
+        # CRD가 완전히 적용될 때까지 대기
+        echo -e "${YELLOW}CRD 적용 확인 중...${NC}"
+        sleep 5
+        
+        # CRD 상태 확인
+        if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ CRD 정상 배포 확인${NC}"
+            
+            # interfaceStatuses 필드 타입 확인
+            echo -e "${YELLOW}CRD 스키마 검증 중...${NC}"
+            SCHEMA_TYPE=$(kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.type}' 2>/dev/null)
+            if [ "$SCHEMA_TYPE" = "object" ]; then
+                echo -e "${GREEN}✓ interfaceStatuses 스키마 확인: object 타입 (중첩 구조 지원)${NC}"
+            else
+                echo -e "${YELLOW}⚠ interfaceStatuses 스키마: $SCHEMA_TYPE (예상: object)${NC}"
+            fi
+        else
+            echo -e "${RED}✗ CRD 배포 확인 실패${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}✗ CRD 배포 실패${NC}"
+        exit 1
+    fi
+else
+    echo -e "${RED}✗ CRD 파일을 찾을 수 없습니다: $CRD_FILE${NC}"
+    exit 1
+fi
+
+# 6. Helm 차트 배포 (이제 CRD Hook 불필요)
+echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
     --set image.tag=${IMAGE_TAG} \
@@ -103,8 +155,8 @@ else
     exit 1
 fi
 
-# 6. 배포 확인
-echo -e "\n${BLUE}6. 배포 상태 확인${NC}"
+# 7. 배포 확인
+echo -e "\n${BLUE}7. 배포 상태 확인${NC}"
 sleep 5
 
 echo -e "\n${YELLOW}Controller 상태:${NC}"
