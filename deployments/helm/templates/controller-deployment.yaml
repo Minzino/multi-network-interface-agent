@@ -44,6 +44,8 @@ spec:
           value: {{ include "multinic-agent.serviceAccountName" . }}
         - name: CONTROLLER_JOB_TTL
           value: "{{ .Values.controller.jobTTLSeconds }}"
+        - name: CONTROLLER_JOB_DELETE_DELAY
+          value: "{{ .Values.controller.jobDeleteDelaySeconds | default "0" }}"
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
 {{- end }}

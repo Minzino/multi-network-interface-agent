@@ -264,14 +264,15 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                         }
                     }
                 }
-                // Fallback: if we couldn't compute per-interface, mark only overall state
+                // Fallback: if we couldn't compute per-interface, mark all as Failed
+                if len(statuses) == 0 {
+                    statuses = c.buildInterfaceStatuses(u, "Failed", reason)
+                }
                 statusPatch := map[string]any{
                     "state": "Failed",
                     "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": reason} },
                     "lastUpdated": time.Now().Format(time.RFC3339),
-                }
-                if len(statuses) > 0 {
-                    statusPatch["interfaceStatuses"] = statuses
+                    "interfaceStatuses": statuses,
                 }
                 _ = c.updateCRStatus(ctx, u, statusPatch)
                 // Cleanup failed job as well (optionally delay)
