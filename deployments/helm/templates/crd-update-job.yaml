@@ -37,10 +37,8 @@ spec:
             echo "📋 새로운 CRD 생성..."
           fi
           
-          # 새 CRD 적용
-          kubectl apply -f - <<'EOF'
-{{ .Files.Get "files/crds/multinicnodeconfig-crd.yaml" | indent 10 }}
-          EOF
+          # ConfigMap에서 CRD 가져와서 적용
+          kubectl get configmap {{ include "multinic-agent.fullname" . }}-crd -n {{ .Release.Namespace }} -o jsonpath='{.data.multinicnodeconfig-crd\.yaml}' | kubectl apply -f -
           
           if [ $? -eq 0 ]; then
             echo "✅ CRD 업데이트 완료"
