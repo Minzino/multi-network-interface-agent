@@ -289,14 +289,22 @@ func (c *Controller) getJobTerminationMessage(ctx context.Context, namespace, jo
     if err != nil || len(pods.Items) == 0 {
         return ""
     }
-    // 최초 Pod 기준으로 종료 메시지 확인
-    p := pods.Items[0]
-    for _, cs := range p.Status.ContainerStatuses {
-        if cs.State.Terminated != nil {
-            return cs.State.Terminated.Message
+    // Terminated 컨테이너가 있는 최신 Pod의 종료 메시지를 반환
+    var latestMsg string
+    var latest time.Time
+    for i := range pods.Items {
+        p := &pods.Items[i]
+        for _, cs := range p.Status.ContainerStatuses {
+            if cs.State.Terminated != nil {
+                t := cs.State.Terminated.FinishedAt.Time
+                if latestMsg == "" || t.After(latest) {
+                    latest = t
+                    latestMsg = cs.State.Terminated.Message
+                }
+            }
         }
     }
-    return ""
+    return latestMsg
 }
 
 // logJobSummary는 종료 메시지(JSON)를 파싱하여 실패 인터페이스를 로그로 출력합니다
@@ -420,6 +428,41 @@ func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstruc
         }
     }
     return nil
+}
+
+// ApplyTerminationSummary parses a termination summary JSON and updates CR per-interface status
+func (c *Controller) ApplyTerminationSummary(ctx context.Context, namespace, nodeName, jobName, msg string) error {
+    u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
+    if err != nil { return err }
+    // Parse failures
+    type failure struct { ID int `json:"id"`; MAC, Name, ErrorType, Reason string }
+    var sum struct { Failures []failure `json:"failures"` }
+    if err := json.Unmarshal([]byte(msg), &sum); err != nil { return nil }
+    // Build maps by ID/MAC
+    failByID := map[int]failure{}
+    failByMAC := map[string]failure{}
+    for _, f := range sum.Failures { failByID[f.ID] = f; if strings.TrimSpace(f.MAC) != "" { failByMAC[strings.ToLower(strings.TrimSpace(f.MAC))] = f } }
+    // Compute per-interface statuses
+    statuses := map[string]any{}
+    ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+    if found {
+        for i := range ifaces {
+            ifaceMap, _ := ifaces[i].(map[string]any)
+            name := fmt.Sprintf("multinic%d", i)
+            id := getIntFromMap(ifaceMap, "id")
+            mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
+            if f, ok := failByID[id]; ok && id != 0 {
+                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailed", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+            } else if f, ok := failByMAC[mac]; ok && mac != "" {
+                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailed", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+            } else {
+                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(id), "macAddress": mac, "status": "Configured", "reason": "JobPartialSuccess", "lastUpdated": time.Now().Format(time.RFC3339)}
+            }
+        }
+    }
+    reason := "JobFailed"; if len(sum.Failures) < len(ifaces) { reason = "JobFailedPartial" }
+    patch := map[string]any{ "state": "Failed", "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": reason} }, "interfaceStatuses": statuses, "lastUpdated": time.Now().Format(time.RFC3339), "lastJobName": jobName }
+    return c.updateCRStatus(ctx, u, patch)
 }
 
 // computeSpecHash creates a SHA256 hash of the CR .spec for change tracking
