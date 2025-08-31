@@ -114,9 +114,9 @@ spec:
                         type: string
                         format: date-time
                 interfaceStatuses:
-                  type: array
-                  description: Per-interface configuration results
-                  items:
+                  type: object
+                  description: Per-interface configuration results (keyed by interface name)
+                  additionalProperties:
                     type: object
                     properties:
                       interfaceIndex:
@@ -139,9 +139,6 @@ spec:
                         type: integer
                         format: int64
                         description: MTU size
-                      interfaceName:
-                        type: string
-                        description: Generated interface name (multinicX)
                       status:
                         type: string
                         description: Current status

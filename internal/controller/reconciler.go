@@ -349,14 +349,15 @@ func getIntFromMap(m map[string]interface{}, key string) int {
 }
 
 // buildInterfaceStatuses creates detailed status information for each interface in the CR
-func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status, reason string) []any {
+// Returns a map where keys are interface names (multinic0, multinic1, etc.)
+func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status, reason string) map[string]any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
         log.Printf("No interfaces found when building status for CR %s/%s", u.GetNamespace(), u.GetName())
-        return []any{}
+        return map[string]any{}
     }
 
-    var interfaceStatuses []any
+    interfaceStatuses := make(map[string]any)
     
     for i, iface := range interfaces {
         ifaceMap, ok := iface.(map[string]interface{})
@@ -371,6 +372,9 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         cidr := getStringFromMap(ifaceMap, "cidr")
         mtu := getIntFromMap(ifaceMap, "mtu")
         
+        // Generate interface name based on index (multinic0, multinic1, etc.)
+        interfaceName := fmt.Sprintf("multinic%d", i)
+        
         // Build interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
             "interfaceIndex": int64(i),
@@ -384,11 +388,8 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
             "lastUpdated":  time.Now().Format(time.RFC3339),
         }
         
-        // Generate interface name based on index (multinic0, multinic1, etc.)
-        interfaceName := fmt.Sprintf("multinic%d", i)
-        interfaceStatus["interfaceName"] = interfaceName
-        
-        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
+        // Use interface name as key in the map
+        interfaceStatuses[interfaceName] = interfaceStatus
         
         log.Printf("Interface[%d] status: ID=%d, MAC=%s, IP=%s, Status=%s, Reason=%s", 
             i, id, macAddress, ipAddress, status, reason)
@@ -454,13 +455,14 @@ func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeN
 }
 
 // buildEnhancedInterfaceStatuses creates detailed status with actual system state check
-func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) []any {
+// Returns a map where keys are interface names (multinic0, multinic1, etc.)
+func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) map[string]any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
-        return []any{}
+        return map[string]any{}
     }
 
-    var interfaceStatuses []any
+    interfaceStatuses := make(map[string]any)
     
     for i, iface := range interfaces {
         ifaceMap, ok := iface.(map[string]interface{})
@@ -475,24 +477,24 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
         cidr := getStringFromMap(ifaceMap, "cidr")
         mtu := getIntFromMap(ifaceMap, "mtu")
         
-        // Determine actual interface state
+        // Generate interface name based on index
         interfaceName := fmt.Sprintf("multinic%d", i)
         actualState := c.getActualInterfaceState(node, macAddress, interfaceName)
         
         // Build comprehensive interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
             "interfaceIndex": int64(i),
-            "id":            id,
+            "id":            int64(id),
             "macAddress":    macAddress,
             "address":       ipAddress,
             "cidr":         cidr,
             "mtu":          int64(mtu),
-            "interfaceName": interfaceName,
             "actualState":   actualState,
             "lastChecked":  time.Now().Format(time.RFC3339),
         }
         
-        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
+        // Use interface name as key in the map
+        interfaceStatuses[interfaceName] = interfaceStatus
     }
     
     return interfaceStatuses
