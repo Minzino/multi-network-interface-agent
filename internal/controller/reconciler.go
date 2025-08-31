@@ -80,9 +80,11 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
 
     osImage := node.Status.NodeInfo.OSImage
 
+    // Use generation-aware job name to avoid collisions with stale jobs
+    gen := specGen
     job := BuildAgentJob(osImage, JobParams{
         Namespace:          namespace,
-        Name:               fmt.Sprintf("multinic-agent-%s", nodeName),
+        Name:               fmt.Sprintf("multinic-agent-%s-g%d", nodeName, gen),
         Image:              c.AgentImage,
         PullPolicy:         c.ImagePullPolicy,
         ServiceAccountName: c.ServiceAccount,
@@ -108,7 +110,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         "lastUpdated": time.Now().Format(time.RFC3339),
     })
 
-    // Upsert: if exists, return nil; else create
+    // If a job with the same generation-aware name exists, skip creating
     if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
         log.Printf("job already exists: %s/%s", namespace, job.Name)
         return nil
@@ -118,6 +120,14 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         return err
     }
     log.Printf("job created: %s/%s for node=%s osImage=%s", namespace, job.Name, nodeName, osImage)
+
+    // Proactively delete stale jobs for this node (different name)
+    jobs, _ := c.Client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=multinic-agent,multinic.io/node-name=" + nodeName})
+    for i := range jobs.Items {
+        if jobs.Items[i].Name != job.Name {
+            c.scheduleJobDeletion(ctx, namespace, jobs.Items[i].Name)
+        }
+    }
     return nil
 }
 
@@ -178,6 +188,13 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         currentState, _, _ := unstructured.NestedString(u.Object, "status", "state")
         if job.Status.Succeeded > 0 {
             if currentState != "Configured" {
+                action := job.Labels["multinic.io/action"]
+                if action == "cleanup" {
+                    // Cleanup job succeeded: do not overwrite CR state; just delete the job
+                    log.Printf("cleanup job succeeded: %s/%s", namespace, job.Name)
+                    c.scheduleJobDeletion(ctx, namespace, job.Name)
+                    continue
+                }
                 log.Printf("job succeeded: %s/%s", namespace, job.Name)
                 // 종료 메시지(요약) 있으면 참고용 로그 출력
                 if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
