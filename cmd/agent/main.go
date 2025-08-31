@@ -146,14 +146,18 @@ func (a *Application) Run() error {
             deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
             if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
                 a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
+                a.delayJobExitIfNeeded()
                 return err
             }
+            a.delayJobExitIfNeeded()
             return nil
         }
         if err := a.processNetworkConfigurations(ctx); err != nil {
             a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
+            a.delayJobExitIfNeeded()
             return err
         }
+        a.delayJobExitIfNeeded()
         return nil
     }
 
@@ -196,6 +200,17 @@ func (a *Application) startHealthServer(port string) error {
 	}()
 
 	return nil
+}
+
+// delayJobExitIfNeeded는 Job 모드에서 종료 전 대기 시간을 적용합니다.
+func (a *Application) delayJobExitIfNeeded() {
+    // JOB_EXIT_DELAY_SECONDS 환경변수 (기본 5초)
+    delayStr := os.Getenv("JOB_EXIT_DELAY_SECONDS")
+    if strings.TrimSpace(delayStr) == "" { delayStr = "5" }
+    d, err := time.ParseDuration(delayStr + "s")
+    if err != nil || d <= 0 { return }
+    a.logger.WithField("delay", d.String()).Info("Delaying job exit for inspection")
+    time.Sleep(d)
 }
 
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
@@ -242,10 +257,23 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		healthService.IncrementFailedConfigs()
 	}
 
-    // 실패 여부를 선계산 (설정 단계 기준)
+    // 실패 여부 선계산 및 부분 실패 처리 정책 적용
     var resultErr error
     if configOutput != nil && configOutput.FailedCount > 0 {
-        resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+        // 부분 실패 정책: 일부 성공 + 일부 실패인 경우에도 Job을 성공(0)으로 처리할지
+        completeOnPartial := strings.EqualFold(strings.TrimSpace(os.Getenv("JOB_COMPLETE_ON_PARTIAL_FAILURE")), "true") || os.Getenv("JOB_COMPLETE_ON_PARTIAL_FAILURE") == ""
+        allFailed := (configOutput.ProcessedCount == 0)
+        partialFailed := (configOutput.ProcessedCount > 0 && configOutput.FailedCount > 0)
+        if allFailed {
+            resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+        } else if partialFailed {
+            if !completeOnPartial {
+                resultErr = fmt.Errorf("network configuration partially failed: %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+            }
+        } else {
+            // shouldn't happen (only failed without processed counted), keep error
+            resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+        }
     }
 
     // 실제로 처리된 것이 있을 때만 로그 출력
