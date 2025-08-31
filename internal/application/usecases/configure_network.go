@@ -187,11 +187,11 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 		return err
 	}
 
-	// 3. 설정 검증
-	if err := uc.validateConfiguration(ctx, interfaceName); err != nil {
-		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
-		return err
-	}
+    // 3. 설정 검증
+    if err := uc.validateConfiguration(ctx, iface, interfaceName); err != nil {
+        metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
+        return err
+    }
 
 	// 4. 성공 상태로 업데이트
 	if err := uc.repository.UpdateInterfaceStatus(ctx, iface.ID, entities.StatusConfigured); err != nil {
@@ -226,18 +226,42 @@ func (uc *ConfigureNetworkUseCase) applyConfiguration(ctx context.Context, iface
 }
 
 // validateConfiguration은 네트워크 설정을 검증하고 실패 시 롤백합니다
-func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, interfaceName entities.InterfaceName) error {
-	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
-		// 검증 실패 시 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
-				err,
-			)
-		}
-		return errors.NewNetworkError("Network configuration validation failed", err)
-	}
-	return nil
+func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
+    // 3-1. 시스템 레벨 검증 (존재/UP)
+    if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
+        // 검증 실패 시 롤백
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
+                err,
+            )
+        }
+        return errors.NewNetworkError("Network configuration validation failed", err)
+    }
+    // 3-2. MAC 일치 검증 (CR vs 실제 시스템)
+    actualMAC, macErr := uc.namingService.GetMacAddressForInterface(interfaceName.String())
+    if macErr != nil {
+        // 시스템 조회 실패 시에도 롤백 시도
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("System MAC check failed and rollback also failed: %v", rollbackErr),
+                macErr,
+            )
+        }
+        return errors.NewNetworkError("System MAC check failed", macErr)
+    }
+    if !strings.EqualFold(strings.TrimSpace(actualMAC), strings.TrimSpace(iface.MacAddress)) {
+        // MAC 불일치 시 롤백
+        mismatch := fmt.Errorf("MAC mismatch after apply: cr=%s system=%s", iface.MacAddress, actualMAC)
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("MAC mismatch and rollback also failed: %v", rollbackErr),
+                mismatch,
+            )
+        }
+        return errors.NewNetworkError("MAC mismatch after apply", mismatch)
+    }
+    return nil
 }
 
 // performRollback은 롤백을 수행하고 결과를 기록합니다
