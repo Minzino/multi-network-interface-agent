@@ -1,4 +1,5 @@
-{{- if .Values.daemonset.enabled }}
+{{- $ds := .Values.daemonset | default dict -}}
+{{- if ($ds.enabled | default false) }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

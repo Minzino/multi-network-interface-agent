@@ -1,4 +1,5 @@
-{{- if .Values.job.install }}
+{{- $job := .Values.job | default dict -}}
+{{- if ($job.install | default false) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
