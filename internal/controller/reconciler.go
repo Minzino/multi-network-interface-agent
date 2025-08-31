@@ -196,17 +196,66 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         } else if job.Status.Failed > 0 {
             if currentState != "Failed" {
                 log.Printf("job failed: %s/%s", namespace, job.Name)
-                // 종료 메시지(요약)에서 실패한 인터페이스 상세를 로그로 남김
+                // 종료 메시지(요약)에서 실패한 인터페이스 상세를 로그로 남김 및 per-interface 상태 반영
+                reason := "JobFailed"
+                statuses := map[string]any{}
                 if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
                     c.logJobSummary(msg)
+                    // Try to parse JSON summary and compute per-interface statuses
+                    type failure struct {
+                        ID        int    `json:"id"`
+                        MAC       string `json:"mac"`
+                        Name      string `json:"name"`
+                        ErrorType string `json:"errorType"`
+                        Reason    string `json:"reason"`
+                    }
+                    var sum struct {
+                        Failures []failure `json:"failures"`
+                    }
+                    if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Failures) > 0 {
+                        // Build set of failed names for quick lookup
+                        failedSet := map[string]failure{}
+                        for _, f := range sum.Failures { failedSet[f.Name] = f }
+                        // Enumerate spec interfaces by index -> multinic{idx}
+                        ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+                        if found {
+                            for i := range ifaces {
+                                name := fmt.Sprintf("multinic%d", i)
+                                if f, ok := failedSet[name]; ok {
+                                    statuses[name] = map[string]any{
+                                        "interfaceIndex": int64(i),
+                                        "id":            int64(f.ID),
+                                        "macAddress":    f.MAC,
+                                        "status":        "Failed",
+                                        "reason":        "JobFailed",
+                                        "message":       f.Reason,
+                                        "lastUpdated":   time.Now().Format(time.RFC3339),
+                                    }
+                                } else {
+                                    // Treat others as configured in a partial failure scenario
+                                    statuses[name] = map[string]any{
+                                        "interfaceIndex": int64(i),
+                                        "status":        "Configured",
+                                        "reason":        "JobPartialSuccess",
+                                        "lastUpdated":   time.Now().Format(time.RFC3339),
+                                    }
+                                }
+                            }
+                            // reflect partial failure in condition reason when some succeeded
+                            if len(sum.Failures) < len(ifaces) { reason = "JobFailedPartial" }
+                        }
+                    }
                 }
-                interfaceStatuses := c.buildInterfaceStatuses(u, "Failed", "JobFailed")
-                _ = c.updateCRStatus(ctx, u, map[string]any{
+                // Fallback: if we couldn't compute per-interface, mark only overall state
+                statusPatch := map[string]any{
                     "state": "Failed",
-                    "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailed"} },
-                    "interfaceStatuses": interfaceStatuses,
+                    "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": reason} },
                     "lastUpdated": time.Now().Format(time.RFC3339),
-                })
+                }
+                if len(statuses) > 0 {
+                    statusPatch["interfaceStatuses"] = statuses
+                }
+                _ = c.updateCRStatus(ctx, u, statusPatch)
                 // Cleanup failed job as well (optionally delay)
                 c.scheduleJobDeletion(ctx, namespace, job.Name)
             }
