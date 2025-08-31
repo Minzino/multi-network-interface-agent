@@ -79,9 +79,19 @@ type ConfigureNetworkInput struct {
 
 // ConfigureNetworkOutput은 유스케이스의 출력 결과입니다
 type ConfigureNetworkOutput struct {
-	ProcessedCount int
-	FailedCount    int
-	TotalCount     int
+    ProcessedCount int
+    FailedCount    int
+    TotalCount     int
+    Failures       []InterfaceFailure
+}
+
+// InterfaceFailure는 실패한 인터페이스에 대한 요약 정보를 담습니다
+type InterfaceFailure struct {
+    ID        int    `json:"id"`
+    MAC       string `json:"mac"`
+    Name      string `json:"name"`
+    ErrorType string `json:"errorType"`
+    Reason    string `json:"reason"`
 }
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
@@ -110,12 +120,14 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		maxWorkers = 1 // 최소 1개는 처리
 	}
 
-	var (
-		processedCount int32
-		failedCount    int32
-		wg             sync.WaitGroup
-		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
-	)
+    var (
+        processedCount int32
+        failedCount    int32
+        wg             sync.WaitGroup
+        semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+        failuresMu     sync.Mutex
+        failures       []InterfaceFailure
+    )
 
 	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
@@ -135,20 +147,21 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
 
-			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount); err != nil {
-				uc.logger.WithError(err).Error("Critical error processing interface")
-			}
-		}(iface)
-	}
+            if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu); err != nil {
+                uc.logger.WithError(err).Error("Critical error processing interface")
+            }
+        }(iface)
+    }
 
 	// 모든 처리가 완료될 때까지 대기
 	wg.Wait()
 
-	return &ConfigureNetworkOutput{
-		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
-		FailedCount:    int(atomic.LoadInt32(&failedCount)),
-		TotalCount:     len(allInterfaces),
-	}, nil
+    return &ConfigureNetworkOutput{
+        ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+        FailedCount:    int(atomic.LoadInt32(&failedCount)),
+        TotalCount:     len(allInterfaces),
+        Failures:       failures,
+    }, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
@@ -583,7 +596,14 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 }
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
-func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context, iface entities.NetworkInterface, osType interfaces.OSType, processedCount, failedCount *int32) error {
+func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
+    ctx context.Context,
+    iface entities.NetworkInterface,
+    osType interfaces.OSType,
+    processedCount, failedCount *int32,
+    failures *[]InterfaceFailure,
+    failuresMu *sync.Mutex,
+) error {
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
 	if err != nil {
@@ -605,15 +625,25 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 			"config_path":    configPath,
 		}).Debug("Processing interface")
 
-		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
-			uc.handleProcessingError(ctx, iface, interfaceName, err)
-			atomic.AddInt32(failedCount, 1)
-		} else {
-			atomic.AddInt32(processedCount, 1)
-		}
-	}
+        if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
+            uc.handleProcessingError(ctx, iface, interfaceName, err)
+            atomic.AddInt32(failedCount, 1)
+            // 실패 상세 수집
+            failuresMu.Lock()
+            *failures = append(*failures, InterfaceFailure{
+                ID:        iface.ID,
+                MAC:       iface.MacAddress,
+                Name:      interfaceName.String(),
+                ErrorType: uc.getErrorType(err),
+                Reason:    err.Error(),
+            })
+            failuresMu.Unlock()
+        } else {
+            atomic.AddInt32(processedCount, 1)
+        }
+    }
 
-	return nil
+    return nil
 }
 
 // checkNeedProcessing는 인터페이스 처리 필요성을 검사합니다

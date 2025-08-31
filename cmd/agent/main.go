@@ -2,6 +2,7 @@ package main
 
 import (
     "context"
+    "encoding/json"
     "fmt"
     "net/http"
     "os"
@@ -212,10 +213,10 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		NodeName: hostname,
 	}
 
-	configOutput, err := a.configureUseCase.Execute(ctx, configInput)
-	if err != nil {
-		return err
-	}
+    configOutput, err := a.configureUseCase.Execute(ctx, configInput)
+    if err != nil {
+        return err
+    }
 
 	// 2. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 정리)
 	deleteInput := usecases.DeleteNetworkInput{
@@ -241,23 +242,54 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		healthService.IncrementFailedConfigs()
 	}
 
-	// 실제로 처리된 것이 있을 때만 로그 출력
-	if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || (deleteOutput != nil && deleteOutput.TotalDeleted > 0) {
-		deletedTotal := 0
-		deleteErrors := 0
-		if deleteOutput != nil {
-			deletedTotal = deleteOutput.TotalDeleted
-			deleteErrors = len(deleteOutput.Errors)
-		}
+    // 실패 여부를 선계산 (설정 단계 기준)
+    var resultErr error
+    if configOutput != nil && configOutput.FailedCount > 0 {
+        resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+    }
 
-		a.logger.WithFields(logrus.Fields{
-			"config_processed": configOutput.ProcessedCount,
-			"config_failed":    configOutput.FailedCount,
-			"config_total":     configOutput.TotalCount,
-			"deleted_total":    deletedTotal,
-			"delete_errors":    deleteErrors,
-		}).Info("Network processing completed")
-	}
+    // 실제로 처리된 것이 있을 때만 로그 출력
+    if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || (deleteOutput != nil && deleteOutput.TotalDeleted > 0) {
+        deletedTotal := 0
+        deleteErrors := 0
+        if deleteOutput != nil {
+            deletedTotal = deleteOutput.TotalDeleted
+            deleteErrors = len(deleteOutput.Errors)
+        }
+
+        fields := logrus.Fields{
+            "config_processed": configOutput.ProcessedCount,
+            "config_failed":    configOutput.FailedCount,
+            "config_total":     configOutput.TotalCount,
+            "deleted_total":    deletedTotal,
+            "delete_errors":    deleteErrors,
+        }
+        if resultErr != nil {
+            a.logger.WithFields(fields).Error("Network processing completed with failures")
+        } else {
+            a.logger.WithFields(fields).Info("Network processing completed")
+        }
+
+        // 종료 메시지(termination log)에 요약 정보 기록 (Controller가 읽어 로그로 표출 가능)
+        // 포맷: JSON {node, processed, failed, total, failures[], deleted_total, delete_errors, timestamp}
+        // 노드 이름은 위에서 resolveNodeName으로 구함
+        summary := map[string]any{
+            "node":          hostname,
+            "processed":     configOutput.ProcessedCount,
+            "failed":        configOutput.FailedCount,
+            "total":         configOutput.TotalCount,
+            "failures":      configOutput.Failures,
+            "deleted_total": deletedTotal,
+            "delete_errors": deleteErrors,
+            "timestamp":     time.Now().Format(time.RFC3339),
+        }
+        if b, err := json.Marshal(summary); err == nil {
+            // Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
+            _ = os.WriteFile("/dev/termination-log", b, 0644)
+        } else {
+            a.logger.WithError(err).Warn("Failed to marshal termination summary JSON")
+        }
+    }
 
 	// 삭제 에러가 있다면 별도로 로깅
 	if len(deleteOutput.Errors) > 0 {
@@ -266,10 +298,11 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		}
 	}
 
-	// 폴링 사이클 메트릭 기록
-	metrics.RecordPollingCycle(time.Since(startTime).Seconds())
+    // 폴링 사이클 메트릭 기록
+    metrics.RecordPollingCycle(time.Since(startTime).Seconds())
 
-	return nil
+    // 설정 실패가 하나라도 있으면 에러 반환 (job 모드에서 비정상 종료 유도)
+    return resultErr
 }
 
 // shutdown은 애플리케이션을 정리하고 종료합니다

@@ -2,6 +2,7 @@ package controller
 
 import (
     "context"
+    "encoding/json"
     "fmt"
     "strings"
     "time"
@@ -168,6 +169,10 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         if job.Status.Succeeded > 0 {
             if currentState != "Configured" {
                 log.Printf("job succeeded: %s/%s", namespace, job.Name)
+                // 종료 메시지(요약) 있으면 참고용 로그 출력
+                if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
+                    c.logJobSummary(msg)
+                }
                 interfaceStatuses := c.buildInterfaceStatuses(u, "Configured", "JobSucceeded")
                 _ = c.updateCRStatus(ctx, u, map[string]any{
                     "state": "Configured",
@@ -181,6 +186,10 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         } else if job.Status.Failed > 0 {
             if currentState != "Failed" {
                 log.Printf("job failed: %s/%s", namespace, job.Name)
+                // 종료 메시지(요약)에서 실패한 인터페이스 상세를 로그로 남김
+                if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
+                    c.logJobSummary(msg)
+                }
                 interfaceStatuses := c.buildInterfaceStatuses(u, "Failed", "JobFailed")
                 _ = c.updateCRStatus(ctx, u, map[string]any{
                     "state": "Failed",
@@ -194,6 +203,50 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
         }
     }
     return nil
+}
+
+// getJobTerminationMessage는 Job의 Pod 종료 메시지를 반환합니다 (컨테이너 termination log)
+func (c *Controller) getJobTerminationMessage(ctx context.Context, namespace, jobName string) string {
+    pods, err := c.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + jobName})
+    if err != nil || len(pods.Items) == 0 {
+        return ""
+    }
+    // 최초 Pod 기준으로 종료 메시지 확인
+    p := pods.Items[0]
+    for _, cs := range p.Status.ContainerStatuses {
+        if cs.State.Terminated != nil {
+            return cs.State.Terminated.Message
+        }
+    }
+    return ""
+}
+
+// logJobSummary는 종료 메시지(JSON)를 파싱하여 실패 인터페이스를 로그로 출력합니다
+func (c *Controller) logJobSummary(msg string) {
+    type failure struct {
+        ID        int    `json:"id"`
+        MAC       string `json:"mac"`
+        Name      string `json:"name"`
+        ErrorType string `json:"errorType"`
+        Reason    string `json:"reason"`
+    }
+    var sum struct {
+        Node      string    `json:"node"`
+        Processed int       `json:"processed"`
+        Failed    int       `json:"failed"`
+        Total     int       `json:"total"`
+        Failures  []failure `json:"failures"`
+        Timestamp string    `json:"timestamp"`
+    }
+    if err := json.Unmarshal([]byte(msg), &sum); err != nil {
+        // 메시지가 JSON이 아니면 원문만 기록
+        log.Printf("job termination message: %s", msg)
+        return
+    }
+    log.Printf("job summary: node=%s processed=%d failed=%d total=%d at=%s", sum.Node, sum.Processed, sum.Failed, sum.Total, sum.Timestamp)
+    for _, f := range sum.Failures {
+        log.Printf("failed interface: id=%d mac=%s name=%s type=%s reason=%s", f.ID, f.MAC, f.Name, f.ErrorType, f.Reason)
+    }
 }
 
 // deleteJob removes a Job by name, ignore errors
