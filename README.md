@@ -1,59 +1,189 @@
-# MultiNIC Agent (Controller + Job + NodeCR)
+# MultiNIC Agent
 
-Kubernetes 네이티브 방식으로 노드별 다중 NIC를 구성합니다. Controller가 노드 OS를 자동 감지하고 OS별로 필요한 디렉토리만 마운트한 Job을 생성합니다. Agent Job은 자신의 Node CR(spec)을 읽어 네트워크를 적용하며, 상태(status)는 Controller가 업데이트합니다.
+> **Kubernetes 네이티브 네트워크 자동화 에이전트**
 
-## 핵심 개념
-- **CRD: MultiNicNodeConfig** (`multinic.io/v1alpha1`)
-  - `spec.nodeName`: 대상 Kubernetes 노드명(= CR 이름과 동일 권장)
-  - `spec.instanceId`: OpenStack Instance UUID (Node.status.nodeInfo.systemUUID와 일치)
-  - `spec.interfaces[]`: `{id, macAddress, address, cidr, mtu}`
-  - `status`: `{state, conditions[], interfaceStatuses[] ...}`
-- **Controller**
-  - CR Watch → 대상 Node 조회(OS Image/UUID) → OS별 마운트로 Job 생성
-  - Job 완료/실패를 감지하여 CR `status.state`를 `Configured/Failed`로 반영
-- **Agent Job**
-  - `NODE_NAME <- spec.nodeName`으로 자신의 CR만 읽고 네트워크 적용
-  - Ubuntu: Netplan(`/etc/netplan`), RHEL 9.4: NetworkManager keyfiles(`/etc/NetworkManager/system-connections`)
+OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스를 **완전 자동으로 관리**하는 Controller + Job 기반 시스템입니다.
 
-## 빠른 시작
+## 🔄 현재 로직 흐름
 
-### 1) Helm 배포 (Controller + Job 모드)
-```bash
-helm upgrade --install multinic deployments/helm -n multinic-system --create-namespace \
-  --set controller.enabled=true \
-  --set agent.dataSource=nodecr \
-  --set agent.nodeCRNamespace=multinic-system \
-  --set image.repository=<이미지> \
-  --set image.tag=<태그> \
-  --set image.pullPolicy=IfNotPresent
+### 시스템 아키텍처
+
+```mermaid
+graph TB
+    External[External System<br/>📋 OpenStack 모니터링]
+    
+    subgraph "Kubernetes Cluster"        
+        subgraph "CR 처리"
+            MultiNICController[MultiNIC Controller<br/>👁️ CR Watch]
+            NodeCR[MultiNicNodeConfig CR<br/>📋 노드별 Interface 데이터:<br/>- Worker01: 2 interfaces<br/>- Worker02: 1 interface<br/>- Worker03: 3 interfaces]
+        end
+        
+        subgraph "Job 실행"
+            Job1[Agent Job<br/>Worker01 처리]
+            Job2[Agent Job<br/>Worker02 처리] 
+            Job3[Agent Job<br/>Worker03 처리]
+        end
+        
+        subgraph "Worker Nodes"
+            Node1[Worker01<br/>SystemUUID: b4975c5f-50bb]
+            Node2[Worker02<br/>SystemUUID: d4defd76-faa9]
+            Node3[Worker03<br/>SystemUUID: a1b2c3d4-e5f6]
+        end
+    end
+    
+    subgraph "Network Interfaces"
+        NIC1[Worker01: multinic0, multinic1]
+        NIC2[Worker02: multinic0]
+        NIC3[Worker03: multinic0, multinic1, multinic2]
+    end
+    
+    %% 데이터 흐름
+    External -->|① CR 생성<br/>노드별 설정| NodeCR
+    NodeCR -.->|② Watch Event<br/>실시간 감지| MultiNICController
+    MultiNICController -->|③ Node별 Job 스케줄링| Job1
+    MultiNICController -->|③ Node별 Job 스케줄링| Job2
+    MultiNICController -->|③ Node별 Job 스케줄링| Job3
+    Job1 -->|④ 네트워크 구성| Node1
+    Job2 -->|④ 네트워크 구성| Node2
+    Job3 -->|④ 네트워크 구성| Node3
+    Node1 -->|⑤ 인터페이스 생성| NIC1
+    Node2 -->|⑤ 인터페이스 생성| NIC2
+    Node3 -->|⑤ 인터페이스 생성| NIC3
+    
+    %% 스타일링
+    classDef external fill:#e8f5e8
+    classDef controller fill:#f3e5f5
+    classDef cr fill:#fff3e0
+    classDef job fill:#ffecb3
+    classDef node fill:#fafafa
+    classDef nic fill:#ffcdd2
+    
+    class External external
+    class MultiNICController controller
+    class NodeCR cr
+    class Job1,Job2,Job3 job
+    class Node1,Node2,Node3 node
+    class NIC1,NIC2,NIC3 nic
 ```
 
-※ Helm 3는 `deployments/helm/crds/*`의 CRD를 자동 설치합니다(업그레이드시 CRD 변경은 수동 적용 필요).\
-컨트롤러가 런타임에 Job을 생성하므로, Helm 차트는 기본적으로 Job 리소스를 설치하지 않습니다(`job.install=false`).
+### 처리 워크플로우
 
-### 2) 샘플 CR 적용(viola2-biz-* 노드)
-```bash
-kubectl apply -n multinic-system -f deployments/crds/samples/
+```mermaid
+sequenceDiagram
+    participant External as External System
+    participant K8s as Kubernetes API
+    participant Controller as MultiNIC Controller
+    participant Job as Agent Job
+    participant Node as Worker Node
+
+    Note over External: 1️⃣ CR 생성
+    External->>K8s: MultiNicNodeConfig CR 생성
+    
+    Note over Controller: 2️⃣ 실시간 감지
+    K8s-->>Controller: Watch Event<br/>(CR 변경 감지)
+    Controller->>Controller: Instance ID → SystemUUID 매핑
+    
+    Note over Job: 3️⃣ Job 스케줄링
+    Controller->>K8s: Node SystemUUID 조회
+    Controller->>K8s: Agent Job 생성<br/>(nodeSelector 적용)
+    
+    Note over Node: 4️⃣ 네트워크 구성
+    K8s->>Job: Job 실행 (타겟 노드)
+    Job->>Node: 고아 인터페이스 정리
+    Job->>Node: 새로운 네트워크 설정<br/>(Netplan/ifcfg)
+    Job->>Node: 드리프트 감지 및 동기화
+    
+    Note over Controller: 5️⃣ 상태 업데이트
+    Job-->>Controller: 실행 결과 수집
+    Controller->>K8s: CR 상태 업데이트<br/>(Configured/Failed)
+    Controller->>K8s: Job 정리 (TTL)
 ```
 
-## 배포 구성
-- 기본값: Controller enabled, DaemonSet 템플릿 포함(필요 시 job.enabled=true로 Job 경로 사용 권장)
-- Controller 실행 모드: 기본 `watch` (Informer 기반). `CONTROLLER_MODE=poll`로 폴링 전환 가능
-- 이미지: `Dockerfile`에서 에이전트(`multinic-agent`)와 컨트롤러(`multinic-controller`) 동시 빌드
+## 📦 패키지 구조
 
-## 환경 변수
-- Agent
-  - `DATA_SOURCE=nodecr` (Kube API에서 Node CR 읽기)
-  - `NODE_CR_NAMESPACE` (기본 multinic-system)
-  - `NODE_NAME` (Downward API: `spec.nodeName`)
-- Controller
-  - `CONTROLLER_NAMESPACE`(기본: Pod 네임스페이스)
-  - `NODE_CR_NAMESPACE`(CR 조회 네임스페이스)
-  - `AGENT_IMAGE`(Job에 사용할 에이전트 이미지)
-  - `POLL_INTERVAL`(poll 모드 주기)
-  - `CONTROLLER_MODE=watch|poll`
+```
+multinic-agent/
+├── cmd/
+│   ├── agent/                 # Agent Job 바이너리
+│   └── controller/            # Controller 바이너리
+├── internal/                  # Clean Architecture
+│   ├── domain/               # 도메인 계층
+│   │   ├── entities/         # NetworkInterface, InterfaceName
+│   │   ├── interfaces/       # Repository, Network 인터페이스
+│   │   └── services/         # InterfaceNamingService
+│   ├── application/          # 애플리케이션 계층
+│   │   └── usecases/        # ConfigureNetwork, DeleteNetwork
+│   ├── infrastructure/       # 인프라스트럭처 계층
+│   │   ├── persistence/     # MySQL Repository
+│   │   ├── network/         # Netplan, RHEL Adapter
+│   │   └── config/         # 설정 관리
+│   └── controller/          # Controller 구현
+│       ├── reconciler.go   # CR 처리 로직
+│       ├── watcher.go      # Watch 이벤트 처리
+│       └── service.go      # Controller 서비스
+├── deployments/
+│   ├── crds/               # CRD 정의 및 샘플
+│   └── helm/              # Helm 차트
+└── scripts/               # 배포 자동화
+```
 
-## CRD 예시
+## 🔧 CRD 설계
+
+### MultiNicNodeConfig CRD 스키마
+
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: multinicnodeconfigs.multinic.io
+spec:
+  group: multinic.io
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              nodeName:
+                type: string
+                description: "Target Kubernetes node name"
+              instanceId:
+                type: string
+                description: "OpenStack Instance UUID"
+              interfaces:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    macAddress:
+                      type: string
+                    address:
+                      type: string
+                    cidr:
+                      type: string
+                    mtu:
+                      type: integer
+          status:
+            type: object
+            properties:
+              state:
+                type: string
+                enum: ["Pending", "Processing", "Configured", "Failed"]
+              lastProcessed:
+                type: string
+              interfaceStatuses:
+                type: object
+```
+
+### 예시 CR 적용
+
 ```yaml
 apiVersion: multinic.io/v1alpha1
 kind: MultiNicNodeConfig
@@ -72,45 +202,72 @@ spec:
       address: 11.11.11.37
       cidr: 11.11.11.0/24
       mtu: 1450
+    - id: 2
+      macAddress: fa:16:3e:0a:17:3b
+      address: 11.11.11.148
+      cidr: 11.11.11.0/24
+      mtu: 1450
 ```
 
-## OS 지원
-- Ubuntu: Netplan(`/etc/netplan`)로 설정 파일 생성 및 `netplan try/apply`
-- RHEL 9.4: NetworkManager keyfiles(`/etc/NetworkManager/system-connections/*.nmconnection`) 사용(어댑터 구현 진행 예정)
-- Host root 마운트 불필요(노드 OS 감지는 `Node.status.nodeInfo.osImage`)
+## 🚀 배포 방법
 
-## 보안/RBAC
-- 최소 권한:
-  - CRD 읽기/상태 패치: `multinicnodeconfigs`, `multinicnodeconfigs/status`
-  - Job 생성/조회: `batch/jobs`
-- Agent는 네트워크 구성에 필요한 권한(privileged, `NET_ADMIN`, `SYS_ADMIN`)만 보유
-- OpenStack 매핑 검증: `spec.instanceId` ↔ `Node.systemUUID` 불일치 시 Job 생성 차단
-
-## 트러블슈팅
-- CR 상태가 `Failed`인 경우
-  - Job 로그 확인: `kubectl logs -n multinic-system job/<job-name>`
-  - Node UUID 확인: `kubectl get node <node> -o jsonpath='{.status.nodeInfo.systemUUID}'`
-  - `spec.instanceId`와 일치하는지 점검
-- OS 인식 오류 시: 컨트롤러 로그에서 `osImage` 확인
-- 네임스페이스 불일치: `NODE_CR_NAMESPACE`와 CR이 위치한 네임스페이스 일치 필요
-
-## 개발/테스트
+### 1. SSH 패스워드 설정
 ```bash
-go test ./...    # 단위 테스트 전체
+# deploy.sh 스크립트에서 SSH_PASSWORD 수정
+vi scripts/deploy.sh
+# SSH_PASSWORD=${SSH_PASSWORD:-"YOUR_SSH_PASSWORD"} → 실제 패스워드로 변경
 ```
 
-프로젝트 구조
+### 2. 원클릭 배포
+```bash
+# 자동 배포 실행
+./scripts/deploy.sh
 ```
-multinic-agent/
-├── cmd/agent/            # Agent 바이너리
-├── cmd/controller/       # Controller 바이너리
-├── internal/             # Clean Architecture 레이어별 코드
-│   ├── controller        # Reconciler/Watcher/Service/JobFactory
-│   ├── application       # Use cases
-│   ├── domain            # Entities/Interfaces
-│   └── infrastructure    # Adapters (OS detector, K8s, Network, etc.)
-├── deployments/
-│   ├── crds/             # CRD와 샘플 CR
-│   └── helm/             # Helm 차트(Controller/Job/DS/RBAC)
-└── scripts/              # 배포 스크립트
+
+배포 스크립트가 자동으로 수행하는 작업:
+1. 이미지 빌드 (`nerdctl build`)
+2. 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
+3. CRD 설치 (`kubectl apply`)
+4. Helm 차트 배포 (`helm upgrade --install`)
+
+## ✅ 배포 완료 확인
+
+### 1. Controller 상태 확인
+```bash
+# Controller Pod 실행 확인
+kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
+
+# Controller 로그 확인
+kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
+```
+
+### 2. 샘플 CR 테스트
+```bash
+# 샘플 CR 적용
+kubectl apply -n multinic-system -f deployments/crds/samples/
+
+# CR 상태 확인
+kubectl get multinicnodeconfigs -n multinic-system
+
+# 생성된 Job 확인
+kubectl get jobs -n multinic-system -l app.kubernetes.io/name=multinic-agent
+```
+
+### 3. 성공 확인 방법
+```bash
+# CR 상태가 "Configured"인지 확인
+kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metadata.name,STATE:.status.state
+
+# 실제 인터페이스 생성 확인
+kubectl exec -n multinic-system <job-pod> -- ip addr show | grep multinic
+
+# 성공 로그 확인
+kubectl logs -n multinic-system <job-name> | grep "processed="
+```
+
+**예상 성공 결과**:
+```
+STATE: Configured
+job summary: processed=4 failed=0 total=4
+multinic0, multinic1 인터페이스 생성 확인
 ```
