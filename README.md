@@ -4,6 +4,19 @@
 
 OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스를 **완전 자동으로 관리**하는 Controller + Job 기반 시스템입니다.
 
+## 📋 개요
+
+### 핵심 특징
+- **단일 이미지, 이중 실행**: 하나의 컨테이너 이미지에서 Controller/Agent 모드로 동작
+- **자동화 워크플로우**: CR 생성/수정 시 즉시 해당 노드에 Agent Job 스케줄링
+- **노드별 맞춤 실행**: 각 노드의 SystemUUID 검증 후 네트워크 인터페이스 자동 설정
+- **실시간 상태 동기화**: Job 완료 후 Controller가 자동으로 CR status 업데이트
+
+### 동작 방식
+1. **Controller (Deployment)**: CR 변경사항을 실시간 감시
+2. **Agent (Job)**: 특정 노드에서만 실행되어 네트워크 인터페이스 설정
+3. **자동 스케줄링**: CR 업데이트 → 해당 노드용 Agent Job 생성 → 네트워크 구성 → 상태 업데이트
+
 ## 🔄 현재 로직 흐름
 
 ### 시스템 아키텍처
@@ -218,6 +231,7 @@ vi scripts/deploy.sh
 # SSH_PASSWORD=${SSH_PASSWORD:-"YOUR_SSH_PASSWORD"} → 실제 패스워드로 변경
 ```
 
+
 ## 🚀 빠른 시작
 
 ### 사전 요구사항
@@ -263,14 +277,24 @@ kubectl apply -f deployments/crds/multinicnodeconfig-crd.yaml
 kubectl get crd multinicnodeconfigs.multinic.io
 ```
 
-#### 4단계: MultiNic Agent 설치
+#### 4단계: MultiNic Agent 설치 (Controller 배포)
 ```bash
+# Controller Deployment + RBAC + ServiceAccount 생성
 helm install multinic-agent ./deployments/helm \
   --namespace multinic-system \
   --set image.tag=1.0.0 \
   --set controller.replicas=1 \
   --wait --timeout=300s
+
+# Controller 상태 확인
+kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
 ```
+
+**이 단계에서 생성되는 리소스:**
+- ✅ **Controller Deployment**: CR 감시 및 Agent Job 스케줄링
+- ✅ **ServiceAccount + RBAC**: Job 생성 권한 설정
+- ✅ **ConfigMap + Secret**: 설정 및 인증 정보
+- 🔄 **자동화 시작**: 이제 CR 생성 시 자동으로 Agent Job 실행
 
 ### 업그레이드
 ```bash
