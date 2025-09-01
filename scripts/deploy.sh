@@ -9,12 +9,12 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 MultiNIC Agent v2 완전 자동 배포 스크립트${NC}"
+echo -e "${GREEN}🚀 MultiNIC Agent v1.0.0 배포 스크립트${NC}"
 
 # 변수 설정
 IMAGE_NAME=${IMAGE_NAME:-"multinic-agent"}
-IMAGE_TAG=${IMAGE_TAG:-"0.5.0"}
-NAMESPACE=${NAMESPACE:-"default"}
+IMAGE_TAG=${IMAGE_TAG:-"1.0.0"}
+NAMESPACE=${NAMESPACE:-"multinic-system"}
 RELEASE_NAME=${RELEASE_NAME:-"multinic-agent"}
 SSH_PASSWORD=${SSH_PASSWORD:-"YOUR_SSH_PASSWORD"}
 
@@ -23,283 +23,148 @@ ALL_NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
 
 echo -e "이미지: ${BLUE}${IMAGE_NAME}:${IMAGE_TAG}${NC}"
 echo -e "네임스페이스: ${BLUE}${NAMESPACE}${NC}"
-echo -e "릴리즈명: ${BLUE}${RELEASE_NAME}${NC}"
 echo -e "클러스터 노드: ${BLUE}${ALL_NODES[*]}${NC}"
 
 # 1. 네임스페이스 생성
-echo -e "\n${BLUE}📁 1단계: 네임스페이스 생성${NC}"
+echo -e "\n${BLUE}1. 네임스페이스 설정${NC}"
 if kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -; then
-    echo -e "${GREEN}✓ 네임스페이스 생성/확인 완료${NC}"
+    echo -e "${GREEN}✓ 네임스페이스 준비 완료${NC}"
 else
     echo -e "${RED}✗ 네임스페이스 생성 실패${NC}"
     exit 1
 fi
 
-# 2. BuildKit 설정 확인
-echo -e "\n${BLUE}🔧 2단계: BuildKit 설정 확인${NC}"
-if ! command -v buildkitd &> /dev/null; then
-    echo -e "${YELLOW}BuildKit이 설치되어 있지 않습니다. 설치를 시작합니다...${NC}"
-    
-    # BuildKit 설치
-    BUILDKIT_VERSION="v0.12.5"
-    ARCH=$(uname -m)
-    case $ARCH in
-        x86_64) ARCH="amd64" ;;
-        aarch64) ARCH="arm64" ;;
-        armv7l) ARCH="armv7" ;;
-        *) echo -e "${RED}지원하지 않는 아키텍처: $ARCH${NC}"; exit 1 ;;
-    esac
-
-    DOWNLOAD_URL="https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz"
-    
-    TMP_DIR=$(mktemp -d)
-    cd $TMP_DIR
-    
-    echo -e "${YELLOW}BuildKit 다운로드 중...${NC}"
-    curl -L -o buildkit.tar.gz "$DOWNLOAD_URL"
-    tar -xzf buildkit.tar.gz
-    sudo cp bin/* /usr/local/bin/
-    
-    cd - > /dev/null
-    rm -rf $TMP_DIR
-    
-    echo -e "${GREEN}✓ BuildKit 설치 완료${NC}"
-else
-    echo -e "${GREEN}✓ BuildKit이 이미 설치되어 있습니다${NC}"
-fi
-
-# 3. containerd 확인 및 시작
-echo -e "\n${BLUE}⚙️ 3단계: containerd 확인${NC}"
-if ! systemctl is-active --quiet containerd; then
-    echo -e "${YELLOW}containerd를 시작합니다...${NC}"
-    sudo systemctl start containerd
-    sleep 2
-fi
-
-if systemctl is-active --quiet containerd; then
-    echo -e "${GREEN}✓ containerd 실행 중${NC}"
-else
-    echo -e "${RED}✗ containerd 시작 실패${NC}"
-    exit 1
-fi
-
-# 4. buildkitd 확인 및 시작
-echo -e "\n${BLUE}🛠️ 4단계: buildkitd 확인 및 시작${NC}"
-if ! pgrep -f buildkitd > /dev/null; then
-    echo -e "${YELLOW}buildkitd를 시작합니다...${NC}"
-    
-    # systemd 서비스 설정
-    cat > /tmp/buildkitd.service << 'EOF'
-[Unit]
-Description=BuildKit daemon
-After=containerd.service
-Requires=containerd.service
-
-[Service]
-Type=notify
-ExecStart=/usr/local/bin/buildkitd --containerd-worker=true --containerd-worker-namespace=k8s.io
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    sudo cp /tmp/buildkitd.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable buildkitd
-    sudo systemctl start buildkitd
-    
-    # 연결 대기
-    echo -e "${YELLOW}buildkitd 연결 대기 중...${NC}"
-    for i in {1..15}; do
-        if buildctl debug workers &>/dev/null; then
-            echo -e "${GREEN}✓ buildkitd 연결 성공${NC}"
-            break
-        elif [ $i -eq 15 ]; then
-            echo -e "${RED}✗ buildkitd 연결 실패${NC}"
-            exit 1
-        else
-            echo "연결 시도 $i/15..."
-            sleep 2
-        fi
-    done
-else
-    echo -e "${GREEN}✓ buildkitd가 이미 실행 중입니다${NC}"
-fi
-
-# 5. 필수 도구 확인
-echo -e "\n${BLUE}🔍 5단계: 필수 도구 확인${NC}"
-commands=("nerdctl" "helm" "kubectl")
+# 2. 필수 도구 확인
+echo -e "\n${BLUE}2. 필수 도구 확인${NC}"
+commands=("nerdctl" "helm" "kubectl" "sshpass")
 for cmd in "${commands[@]}"; do
     if ! command -v $cmd &> /dev/null; then
         echo -e "${RED}✗ $cmd가 설치되어 있지 않습니다${NC}"
         exit 1
     fi
 done
+echo -e "${GREEN}✓ 모든 필수 도구 확인 완료${NC}"
 
-# sshpass 설치 확인
-if ! command -v sshpass &> /dev/null; then
-    echo -e "${YELLOW}sshpass가 설치되어 있지 않습니다. 설치를 시도합니다...${NC}"
-    if command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y sshpass
-    elif command -v yum &> /dev/null; then
-        sudo yum install -y sshpass
-    elif command -v dnf &> /dev/null; then
-        sudo dnf install -y sshpass
-    elif command -v zypper &> /dev/null; then
-        sudo zypper install -y sshpass
-    else
-        echo -e "${RED}✗ sshpass 설치에 실패했습니다. 수동으로 설치해주세요${NC}"
-        exit 1
-    fi
-    
-    if command -v sshpass &> /dev/null; then
-        echo -e "${GREEN}✓ sshpass 설치 완료${NC}"
-    else
-        echo -e "${RED}✗ sshpass 설치 실패${NC}"
-        exit 1
-    fi
-fi
-
-echo -e "${GREEN}✓ 필수 도구 확인 완료${NC}"
-
-# 6. 이미지 빌드
-echo -e "\n${BLUE}📦 6단계: 이미지 빌드${NC}"
-cd "$(dirname "$0")/.."
-
-echo -e "${YELLOW}nerdctl로 이미지 빌드 중...${NC}"
-nerdctl --namespace=k8s.io --address /var/run/containerd/containerd.sock build --no-cache -t ${IMAGE_NAME}:${IMAGE_TAG} .
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ 이미지 빌드 완료${NC}"
+# 3. 이미지 빌드
+echo -e "\n${BLUE}3. 이미지 빌드${NC}"
+if nerdctl build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
+    echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"
 else
     echo -e "${RED}✗ 이미지 빌드 실패${NC}"
     exit 1
 fi
 
-# 7. 이미지를 tar로 저장
-echo -e "\n${BLUE}💾 7단계: 이미지 저장${NC}"
-echo -e "${YELLOW}이미지를 tar 파일로 저장 중...${NC}"
-nerdctl --namespace=k8s.io --address /var/run/containerd/containerd.sock save ${IMAGE_NAME}:${IMAGE_TAG} -o ${IMAGE_NAME}-${IMAGE_TAG}.tar
+# 4. 이미지를 모든 노드에 배포
+echo -e "\n${BLUE}4. 모든 노드에 이미지 배포${NC}"
+TMP_IMAGE_FILE="/tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
 
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ 이미지 저장 완료${NC}"
-else
-    echo -e "${RED}✗ 이미지 저장 실패${NC}"
-    exit 1
-fi
+echo -e "${YELLOW}이미지 저장 중...${NC}"
+nerdctl save ${IMAGE_NAME}:${IMAGE_TAG} -o ${TMP_IMAGE_FILE}
 
-# 8. 모든 노드에 이미지 배포
-echo -e "\n${BLUE}🚚 8단계: 모든 노드에 이미지 배포${NC}"
+CURRENT_NODE=$(hostname)
+
 for node in "${ALL_NODES[@]}"; do
-    echo -e "${YELLOW}📦 $node 노드에 이미지 전송 중...${NC}"
+    echo -e "${YELLOW}노드 ${node}에 이미지 배포 중...${NC}"
     
-    if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${IMAGE_NAME}-${IMAGE_TAG}.tar $node:/tmp/ 2>/dev/null; then
-        echo -e "${YELLOW}🔧 $node 노드에 이미지 로드 중...${NC}"
-        
-        # nerdctl만 사용하도록 고정
-        echo -e "${BLUE}INFO: nerdctl을 사용하여 이미지 로드${NC}"
-        
-        # nerdctl로 이미지 로드 (sudo 제거 - 이미 root로 실행 중)
-        LOAD_COMMAND="nerdctl --namespace=k8s.io load -i /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar && rm /tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
-        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $node "${LOAD_COMMAND}"; then
-            echo -e "${GREEN}✓ $node 노드 완료${NC}"
+    if [ "$node" = "$CURRENT_NODE" ]; then
+        # 현재 노드는 이미 이미지가 있으므로 건너뛰기
+        echo -e "${GREEN}✓ ${node}: 현재 노드 (이미지 이미 존재)${NC}"
+        continue
+    fi
+    
+    # 이미지 파일 전송
+    if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
+        # 원격 노드에서 이미지 로드
+        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
+            echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
         else
-            echo -e "${YELLOW}⚠️  $node 노드 이미지 로드 실패 (계속 진행)${NC}"
+            echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
+            exit 1
         fi
     else
-        echo -e "${YELLOW}⚠️  $node 노드 접근 실패 (계속 진행)${NC}"
+        echo -e "${RED}✗ ${node}: 이미지 전송 실패${NC}"
+        exit 1
     fi
 done
 
-# 로컬 tar 파일 정리
-echo -e "${BLUE}🗑️ 로컬 tar 파일 정리...${NC}"
-rm -f ${IMAGE_NAME}-${IMAGE_TAG}.tar
-echo -e "${GREEN}✓ 모든 노드에 이미지 배포 완료${NC}"
+# 임시 파일 정리
+rm -f ${TMP_IMAGE_FILE}
 
-# 9. Helm 차트 검증
-echo -e "\n${BLUE}📋 9단계: Helm 차트 검증${NC}"
-if helm lint ./deployments/helm; then
-    echo -e "${GREEN}✓ Helm 차트 검증 완료${NC}"
+# 5. CRD 배포
+echo -e "\n${BLUE}5. CRD 배포${NC}"
+CRD_FILE="deployments/crds/multinicnodeconfig-crd.yaml"
+
+if [ -f "$CRD_FILE" ]; then
+    echo -e "${YELLOW}CRD 적용 중...${NC}"
+    
+    # 기존 CRD가 있는지 확인
+    if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+        echo -e "${YELLOW}기존 CRD 발견 - 업데이트 모드${NC}"
+        
+        # 기존 CRD 삭제 후 새로 생성 (스키마 변경을 위해)
+        echo -e "${YELLOW}기존 CRD 삭제 중...${NC}"
+        kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
+        
+        echo -e "${YELLOW}CRD 삭제 완료, 5초 대기 중...${NC}"
+        sleep 5
+    fi
+    
+    # 새 CRD 적용
+    if kubectl apply -f "$CRD_FILE"; then
+        echo -e "${GREEN}✓ CRD 배포 완료${NC}"
+        
+        # CRD가 완전히 적용될 때까지 대기
+        echo -e "${YELLOW}CRD 적용 확인 중...${NC}"
+        sleep 5
+        
+        # CRD 상태 확인
+        if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
+            echo -e "${GREEN}✓ CRD 정상 배포 확인${NC}"
+            
+            # interfaceStatuses 필드 타입 확인
+            echo -e "${YELLOW}CRD 스키마 검증 중...${NC}"
+            SCHEMA_TYPE=$(kubectl get crd multinicnodeconfigs.multinic.io -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.status.properties.interfaceStatuses.type}' 2>/dev/null)
+            if [ "$SCHEMA_TYPE" = "object" ]; then
+                echo -e "${GREEN}✓ interfaceStatuses 스키마 확인: object 타입 (중첩 구조 지원)${NC}"
+            else
+                echo -e "${YELLOW}⚠ interfaceStatuses 스키마: $SCHEMA_TYPE (예상: object)${NC}"
+            fi
+        else
+            echo -e "${RED}✗ CRD 배포 확인 실패${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}✗ CRD 배포 실패${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}✗ Helm 차트 검증 실패${NC}"
+    echo -e "${RED}✗ CRD 파일을 찾을 수 없습니다: $CRD_FILE${NC}"
     exit 1
 fi
 
-# 10. MultiNIC Agent 배포 (업그레이드 또는 신규 설치)
-echo -e "\n${BLUE}🚀 10단계: MultiNIC Agent 배포${NC}"
-echo -e "${YELLOW}기존 Helm 릴리즈를 정리합니다 (오류는 무시됩니다)...${NC}"
-helm uninstall $RELEASE_NAME --namespace $NAMESPACE &> /dev/null || true
-echo -e "${YELLOW}Helm으로 업그레이드 또는 신규 설치를 진행합니다...${NC}"
+# 6. Helm 차트 배포 (이제 CRD Hook 불필요)
+echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
-    --set image.repository=$IMAGE_NAME \
-    --set image.tag=$IMAGE_TAG \
-    --set image.pullPolicy=IfNotPresent \
-    --wait --timeout=5m; then
-
-    echo -e "${GREEN}✓ MultiNIC Agent 배포 완료${NC}"
+    --set image.tag=${IMAGE_TAG} \
+    --set namespace=${NAMESPACE} \
+    --wait --timeout=300s; then
+    echo -e "${GREEN}✓ Helm 차트 배포 완료${NC}"
 else
-    echo -e "${RED}✗ MultiNIC Agent 배포 실패${NC}"
+    echo -e "${RED}✗ Helm 차트 배포 실패${NC}"
     exit 1
 fi
 
+# 7. 배포 확인
+echo -e "\n${BLUE}7. 배포 상태 확인${NC}"
+sleep 5
 
+echo -e "\n${YELLOW}Controller 상태:${NC}"
+kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent-controller
 
-# 12. 전체 상태 확인
-echo -e "\n${BLUE}📊 12단계: 전체 시스템 상태 확인${NC}"
-echo "=================================================="
-echo "📋 MultiNIC Agent DaemonSet 상태:"
-kubectl get daemonset -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent
+echo -e "\n${YELLOW}MultiNIC NodeConfig:${NC}"
+kubectl get multinicnodeconfigs.multinic.io -n $NAMESPACE
 
-echo ""
-echo "📋 MultiNIC Agent Pod 상태 (모든 노드):"
-kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o wide
-
-echo ""
-echo "📋 노드별 Pod 분포:"
-kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o jsonpath='{range .items[*]}{.spec.nodeName}{"\t"}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}' | column -t
-
-echo ""
-echo "📋 서비스 및 기타 리소스:"
-kubectl get svc,secret,serviceaccount,clusterrole,clusterrolebinding -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent
-echo "=================================================="
-
-# 13. 헬스체크
-echo -e "\n${BLUE}🩺 13단계: 헬스체크${NC}"
-POD=$(kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-if [ ! -z "$POD" ]; then
-    echo -e "${YELLOW}첫 번째 Pod ($POD) 로그 확인 (최근 10줄):${NC}"
-    kubectl logs $POD -n $NAMESPACE --tail=10
-    
-    echo ""
-    echo -e "${YELLOW}헬스체크 엔드포인트 테스트:${NC}"
-echo -e "${BLUE}다음 명령어로 헬스체크를 확인할 수 있습니다:${NC}"
-    echo "kubectl port-forward $POD 8080:8080 -n $NAMESPACE"
-    echo "curl http://localhost:8080/"
-else
-    echo -e "${YELLOW}실행 중인 Pod가 없습니다.${NC}"
-fi
-
-echo -e "\n${GREEN}🎉 MultiNIC Agent v2 배포가 완료되었습니다!${NC}"
-
-echo -e "\n${YELLOW}📖 사용법:${NC}"
-echo -e "  • Agent 로그 확인: ${BLUE}kubectl logs -f daemonset/$RELEASE_NAME -n $NAMESPACE${NC}"
-echo -e "  • Pod 상태 확인: ${BLUE}kubectl get pods -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent${NC}"
-echo -e "  • 특정 노드 Pod 로그: ${BLUE}kubectl logs <pod-name> -n $NAMESPACE${NC}"
-echo -e "  • 헬스체크: ${BLUE}kubectl port-forward <pod-name> 8080:8080 -n $NAMESPACE${NC}"
-
-echo -e "\n${BLUE}🔧 다음 단계:${NC}"
-echo -e "  1. 데이터베이스에 테스트 데이터 추가"
-echo -e "  2. 네트워크 인터페이스 생성 모니터링"
-echo -e "  3. Agent 로그에서 처리 상황 확인"
-
-echo -e "\n${BLUE}🗑️  삭제 방법:${NC}"
-echo -e "  ${YELLOW}helm uninstall $RELEASE_NAME -n $NAMESPACE${NC}"
-
-echo -e "\n${YELLOW}⚠️  참고사항:${NC}"
-echo -e "  • Agent는 DaemonSet으로 모든 노드에서 실행됩니다"
-echo -e "  • buildkitd는 systemd 서비스로 자동 시작됩니다"
-echo -e "  • 네트워크 설정 변경을 위해 privileged 권한이 필요합니다"
-echo -e "  • 실패한 설정은 자동으로 롤백됩니다"
+echo -e "\n${GREEN}✅ 배포 완료! MultiNIC Agent v1.0.0이 성공적으로 배포되었습니다.${NC}"
+echo -e "\n${BLUE}로그 확인:${NC}"
+echo -e "kubectl logs -n $NAMESPACE -l app.kubernetes.io/name=multinic-agent-controller -f"

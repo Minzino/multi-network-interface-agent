@@ -79,9 +79,19 @@ type ConfigureNetworkInput struct {
 
 // ConfigureNetworkOutput은 유스케이스의 출력 결과입니다
 type ConfigureNetworkOutput struct {
-	ProcessedCount int
-	FailedCount    int
-	TotalCount     int
+    ProcessedCount int
+    FailedCount    int
+    TotalCount     int
+    Failures       []InterfaceFailure
+}
+
+// InterfaceFailure는 실패한 인터페이스에 대한 요약 정보를 담습니다
+type InterfaceFailure struct {
+    ID        int    `json:"id"`
+    MAC       string `json:"mac"`
+    Name      string `json:"name"`
+    ErrorType string `json:"errorType"`
+    Reason    string `json:"reason"`
 }
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
@@ -110,12 +120,14 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		maxWorkers = 1 // 최소 1개는 처리
 	}
 
-	var (
-		processedCount int32
-		failedCount    int32
-		wg             sync.WaitGroup
-		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
-	)
+    var (
+        processedCount int32
+        failedCount    int32
+        wg             sync.WaitGroup
+        semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+        failuresMu     sync.Mutex
+        failures       []InterfaceFailure
+    )
 
 	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
@@ -135,20 +147,21 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
 
-			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount); err != nil {
-				uc.logger.WithError(err).Error("Critical error processing interface")
-			}
-		}(iface)
-	}
+            if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu); err != nil {
+                uc.logger.WithError(err).Error("Critical error processing interface")
+            }
+        }(iface)
+    }
 
 	// 모든 처리가 완료될 때까지 대기
 	wg.Wait()
 
-	return &ConfigureNetworkOutput{
-		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
-		FailedCount:    int(atomic.LoadInt32(&failedCount)),
-		TotalCount:     len(allInterfaces),
-	}, nil
+    return &ConfigureNetworkOutput{
+        ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+        FailedCount:    int(atomic.LoadInt32(&failedCount)),
+        TotalCount:     len(allInterfaces),
+        Failures:       failures,
+    }, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
@@ -174,11 +187,11 @@ func (uc *ConfigureNetworkUseCase) processInterface(ctx context.Context, iface e
 		return err
 	}
 
-	// 3. 설정 검증
-	if err := uc.validateConfiguration(ctx, interfaceName); err != nil {
-		metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
-		return err
-	}
+    // 3. 설정 검증
+    if err := uc.validateConfiguration(ctx, iface, interfaceName); err != nil {
+        metrics.RecordInterfaceProcessing(interfaceName.String(), "failed", time.Since(startTime).Seconds())
+        return err
+    }
 
 	// 4. 성공 상태로 업데이트
 	if err := uc.repository.UpdateInterfaceStatus(ctx, iface.ID, entities.StatusConfigured); err != nil {
@@ -213,18 +226,44 @@ func (uc *ConfigureNetworkUseCase) applyConfiguration(ctx context.Context, iface
 }
 
 // validateConfiguration은 네트워크 설정을 검증하고 실패 시 롤백합니다
-func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, interfaceName entities.InterfaceName) error {
-	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
-		// 검증 실패 시 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
-				err,
-			)
-		}
-		return errors.NewNetworkError("Network configuration validation failed", err)
-	}
-	return nil
+func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
+    // 3-1. 시스템 레벨 검증 (존재/UP)
+    if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
+        // 검증 실패 시 롤백
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
+                err,
+            )
+        }
+        return errors.NewNetworkError("Network configuration validation failed", err)
+    }
+    // 3-2. MAC 일치 검증 (CR vs 실제 시스템)
+    actualMAC, macErr := uc.namingService.GetMacAddressForInterface(interfaceName.String())
+    if macErr != nil {
+        // 시스템 조회 실패 시에도 롤백 시도
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("System MAC check failed and rollback also failed: %v", rollbackErr),
+                macErr,
+            )
+        }
+        return errors.NewNetworkError("System MAC check failed", macErr)
+    }
+    if !strings.EqualFold(strings.TrimSpace(actualMAC), strings.TrimSpace(iface.MacAddress)) {
+        // MAC 불일치 시 롤백
+        mismatch := fmt.Errorf("MAC mismatch after apply: cr=%s system=%s", iface.MacAddress, actualMAC)
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("MAC mismatch and rollback also failed: %v", rollbackErr),
+                mismatch,
+            )
+        }
+        return errors.NewNetworkError("MAC mismatch after apply", mismatch)
+    }
+
+    // MTU/IPv4는 시스템 환경/외부 요인으로 즉시 반영이 지연될 수 있어, 성공 판정은 MAC/존재/UP 기준으로 제한합니다.
+    return nil
 }
 
 // performRollback은 롤백을 수행하고 결과를 기록합니다
@@ -280,6 +319,15 @@ func (uc *ConfigureNetworkUseCase) isDrifted(ctx context.Context, dbIface entiti
 			"file_mac": fileConfig.macAddress,
 		}).Warn("MAC address mismatch, treating as configuration change")
 		return true
+	}
+
+	// 실제 시스템 인터페이스 검증 추가
+	interfaceName := uc.extractInterfaceNameFromPath(configPath)
+	if interfaceName != "" {
+		systemDrift := uc.checkSystemInterfaceDrift(ctx, dbIface, interfaceName)
+		if systemDrift {
+			return true
+		}
 	}
 
 	// 드리프트 체크
@@ -368,6 +416,77 @@ func (uc *ConfigureNetworkUseCase) checkConfigDrift(dbIface entities.NetworkInte
 	return isDrifted
 }
 
+// extractInterfaceNameFromPath는 설정 파일 경로에서 인터페이스 이름을 추출합니다
+func (uc *ConfigureNetworkUseCase) extractInterfaceNameFromPath(configPath string) string {
+	fileName := filepath.Base(configPath)
+	// netplan: "92-multinic0.yaml" -> "multinic0"
+	if strings.HasSuffix(fileName, ".yaml") && strings.Contains(fileName, "-") {
+		parts := strings.Split(strings.TrimSuffix(fileName, ".yaml"), "-")
+		if len(parts) >= 2 {
+			return parts[len(parts)-1] // 마지막 부분이 인터페이스 이름
+		}
+	}
+	// ifcfg: "ifcfg-multinic0" -> "multinic0"
+	if strings.HasPrefix(fileName, "ifcfg-") {
+		return strings.TrimPrefix(fileName, "ifcfg-")
+	}
+	return ""
+}
+
+// checkSystemInterfaceDrift는 CR 설정과 실제 시스템 인터페이스 상태를 비교합니다
+func (uc *ConfigureNetworkUseCase) checkSystemInterfaceDrift(ctx context.Context, dbIface entities.NetworkInterface, interfaceName string) bool {
+	// 실제 시스템에서 인터페이스 정보 조회
+	actualMAC, err := uc.namingService.GetMacAddressForInterface(interfaceName)
+	if err != nil {
+		// 인터페이스가 존재하지 않거나 조회 실패 시 드리프트로 간주
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"cr_mac":         dbIface.MacAddress,
+			"error":          err,
+		}).Warn("Failed to get actual interface MAC - system interface validation failed")
+		return true
+	}
+
+	// MAC 주소 비교 (대소문자 무관)
+	if strings.ToLower(actualMAC) != strings.ToLower(dbIface.MacAddress) {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"cr_mac":         dbIface.MacAddress,
+			"actual_mac":     actualMAC,
+		}).Error("CRITICAL: CR MAC address does not match actual system interface - blocking application")
+		return true
+	}
+
+	// 추가 검증: 인터페이스 상태 확인 (UP 상태면 위험함)
+	if uc.isInterfaceUp(ctx, interfaceName) {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"mac_address":    actualMAC,
+		}).Warn("Target interface is UP - potentially dangerous to modify")
+		// UP 상태 인터페이스도 드리프트로 간주하여 신중하게 처리
+		return true
+	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"interface_name": interfaceName,
+		"mac_address":    actualMAC,
+	}).Debug("System interface validation passed")
+	return false
+}
+
+// isInterfaceUp은 인터페이스가 UP 상태인지 확인합니다
+func (uc *ConfigureNetworkUseCase) isInterfaceUp(ctx context.Context, interfaceName string) bool {
+	isUp, err := uc.namingService.IsInterfaceUp(interfaceName)
+	if err != nil {
+		uc.logger.WithFields(logrus.Fields{
+			"interface_name": interfaceName,
+			"error":          err,
+		}).Debug("Failed to check interface UP status, assuming safe to modify")
+		return false // 에러 시 안전하게 false 반환 (처리 허용)
+	}
+	return isUp
+}
+
 // findIfcfgFile는 해당 인터페이스의 ifcfg 파일을 찾습니다
 func (uc *ConfigureNetworkUseCase) findIfcfgFile(interfaceName string) string {
 	configDir := uc.configurer.GetConfigDir()
@@ -399,6 +518,15 @@ func (uc *ConfigureNetworkUseCase) isIfcfgDrifted(ctx context.Context, dbIface e
 			"file_mac": fileConfig.macAddress,
 		}).Warn("MAC address mismatch in ifcfg file")
 		return true
+	}
+
+	// 실제 시스템 인터페이스 검증 추가
+	interfaceName := uc.extractInterfaceNameFromPath(configPath)
+	if interfaceName != "" {
+		systemDrift := uc.checkSystemInterfaceDrift(ctx, dbIface, interfaceName)
+		if systemDrift {
+			return true
+		}
 	}
 
 	// 드리프트 체크
@@ -494,7 +622,14 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 }
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
-func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context, iface entities.NetworkInterface, osType interfaces.OSType, processedCount, failedCount *int32) error {
+func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
+    ctx context.Context,
+    iface entities.NetworkInterface,
+    osType interfaces.OSType,
+    processedCount, failedCount *int32,
+    failures *[]InterfaceFailure,
+    failuresMu *sync.Mutex,
+) error {
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
 	if err != nil {
@@ -516,15 +651,25 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(ctx context.Context
 			"config_path":    configPath,
 		}).Debug("Processing interface")
 
-		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
-			uc.handleProcessingError(ctx, iface, interfaceName, err)
-			atomic.AddInt32(failedCount, 1)
-		} else {
-			atomic.AddInt32(processedCount, 1)
-		}
-	}
+        if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
+            uc.handleProcessingError(ctx, iface, interfaceName, err)
+            atomic.AddInt32(failedCount, 1)
+            // 실패 상세 수집
+            failuresMu.Lock()
+            *failures = append(*failures, InterfaceFailure{
+                ID:        iface.ID,
+                MAC:       iface.MacAddress,
+                Name:      interfaceName.String(),
+                ErrorType: uc.getErrorType(err),
+                Reason:    err.Error(),
+            })
+            failuresMu.Unlock()
+        } else {
+            atomic.AddInt32(processedCount, 1)
+        }
+    }
 
-	return nil
+    return nil
 }
 
 // checkNeedProcessing는 인터페이스 처리 필요성을 검사합니다
@@ -543,6 +688,12 @@ func (uc *ConfigureNetworkUseCase) checkRHELNeedProcessing(ctx context.Context, 
 	isDrifted := false
 	if fileExists {
 		isDrifted = uc.isIfcfgDrifted(ctx, iface, configPath)
+	}
+
+	// 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
+	systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
+	if systemDrift {
+		isDrifted = true
 	}
 
 	// 파일이 없거나, 드리프트가 있거나, 아직 설정되지 않은 경우 처리
@@ -564,6 +715,13 @@ func (uc *ConfigureNetworkUseCase) checkNetplanNeedProcessing(ctx context.Contex
 	if fileExists {
 		isDrifted = uc.isDrifted(ctx, iface, configPath)
 	}
+
+	// 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
+	systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
+	if systemDrift {
+		isDrifted = true
+	}
+
 	shouldProcess := !fileExists || isDrifted || iface.Status == entities.StatusPending
 	return shouldProcess, configPath
 }

@@ -57,10 +57,11 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 		return errors.NewSystemError("failed to marshal Netplan configuration", err)
 	}
 
-	// Save configuration file
-	if err := a.fileSystem.WriteFile(configPath, configData, 0644); err != nil {
-		return errors.NewSystemError("failed to save Netplan configuration file", err)
-	}
+    // Save configuration file with restrictive permissions to satisfy netplan security requirements
+    // Netplan warns/fails when files are group/world-readable. Use 0600.
+    if err := a.fileSystem.WriteFile(configPath, configData, 0600); err != nil {
+        return errors.NewSystemError("failed to save Netplan configuration file", err)
+    }
 
 	a.logger.WithFields(logrus.Fields{
 		"interface":   name.String(),

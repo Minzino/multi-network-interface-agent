@@ -6,6 +6,7 @@ import (
 	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/domain/services"
 	"multinic-agent/internal/infrastructure/metrics"
+	"os"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -55,13 +56,26 @@ func NewDeleteNetworkUseCase(
 
 // Execute는 고아 인터페이스 삭제 유스케이스를 실행합니다
 func (uc *DeleteNetworkUseCase) Execute(ctx context.Context, input DeleteNetworkInput) (*DeleteNetworkOutput, error) {
-	// 삭제 프로세스 시작 로그는 실제 삭제가 있을 때만 출력
-
 	osType, err := uc.osDetector.DetectOS()
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect OS: %w", err)
 	}
 
+	// AGENT_ACTION=cleanup인 경우 모든 multinic 파일을 정리 (CR 삭제 후 실행되므로 DB 조회 불가)
+	if os.Getenv("AGENT_ACTION") == "cleanup" {
+		uc.logger.Info("Cleanup mode: removing all multinic interface files")
+		switch osType {
+		case interfaces.OSTypeUbuntu:
+			return uc.executeFullNetplanCleanup(ctx, input)
+		case interfaces.OSTypeRHEL:
+			return uc.executeFullIfcfgCleanup(ctx, input)
+		default:
+			uc.logger.WithField("os_type", osType).Warn("Skipping cleanup for unsupported OS type")
+			return &DeleteNetworkOutput{}, nil
+		}
+	}
+
+	// 일반 모드: DB 기반 고아 인터페이스 감지
 	switch osType {
 	case interfaces.OSTypeUbuntu:
 		return uc.executeNetplanCleanup(ctx, input)
@@ -423,4 +437,113 @@ func (uc *DeleteNetworkUseCase) getMACAddressFromNetplanFile(filePath string) (s
 	}
 
 	return "", fmt.Errorf("MAC address not found")
+}
+
+// executeFullNetplanCleanup는 모든 multinic netplan 파일을 정리합니다 (cleanup 모드용)
+func (uc *DeleteNetworkUseCase) executeFullNetplanCleanup(ctx context.Context, input DeleteNetworkInput) (*DeleteNetworkOutput, error) {
+	output := &DeleteNetworkOutput{
+		DeletedInterfaces: []string{},
+		Errors:            []error{},
+	}
+
+	// /etc/netplan 디렉토리에서 모든 multinic 관련 파일 스캔
+	netplanDir := "/etc/netplan"
+	files, err := uc.namingService.ListNetplanFiles(netplanDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan netplan directory: %w", err)
+	}
+
+	var multinicFiles []string
+	for _, fileName := range files {
+		// multinic 파일만 처리 (9*-multinic*.yaml 패턴)
+		if uc.isMultinicNetplanFile(fileName) {
+			multinicFiles = append(multinicFiles, fileName)
+		}
+	}
+
+	if len(multinicFiles) == 0 {
+		uc.logger.Info("No multinic netplan files found - cleanup complete")
+		return output, nil
+	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"node_name":      input.NodeName,
+		"multinic_files": multinicFiles,
+	}).Info("Found multinic netplan files - starting full cleanup")
+
+	for _, fileName := range multinicFiles {
+		interfaceName := uc.extractInterfaceNameFromFile(fileName)
+		if err := uc.deleteNetplanFile(ctx, fileName, interfaceName); err != nil {
+			uc.logger.WithFields(logrus.Fields{
+				"file_name":      fileName,
+				"interface_name": interfaceName,
+				"error":          err.Error(),
+			}).Error("Failed to delete multinic netplan file")
+			output.Errors = append(output.Errors, fmt.Errorf("failed to delete netplan file %s: %w", fileName, err))
+		} else {
+			output.DeletedInterfaces = append(output.DeletedInterfaces, interfaceName)
+			output.TotalDeleted++
+			metrics.OrphanedInterfacesDeleted.Inc()
+		}
+	}
+	
+	return output, nil
+}
+
+// executeFullIfcfgCleanup는 모든 multinic ifcfg 파일을 정리합니다 (cleanup 모드용)
+func (uc *DeleteNetworkUseCase) executeFullIfcfgCleanup(ctx context.Context, input DeleteNetworkInput) (*DeleteNetworkOutput, error) {
+	output := &DeleteNetworkOutput{
+		DeletedInterfaces: []string{},
+		Errors:            []error{},
+	}
+
+	// ifcfg 파일 디렉토리
+	ifcfgDir := "/etc/sysconfig/network-scripts"
+
+	// 디렉토리의 파일 목록 가져오기
+	files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
+	}
+
+	var multinicFiles []string
+	for _, fileName := range files {
+		// ifcfg-multinic* 파일만 처리
+		if uc.isMultinicIfcfgFile(fileName) {
+			multinicFiles = append(multinicFiles, fileName)
+		}
+	}
+
+	if len(multinicFiles) == 0 {
+		uc.logger.Info("No multinic ifcfg files found - cleanup complete")
+		return output, nil
+	}
+
+	uc.logger.WithFields(logrus.Fields{
+		"node_name":      input.NodeName,
+		"multinic_files": multinicFiles,
+	}).Info("Found multinic ifcfg files - starting full cleanup")
+
+	// 모든 multinic 파일 삭제
+	for _, fileName := range multinicFiles {
+		interfaceName := uc.extractInterfaceNameFromIfcfgFile(fileName)
+		if interfaceName == "" {
+			continue
+		}
+
+		if err := uc.rollbacker.Rollback(ctx, interfaceName); err != nil {
+			uc.logger.WithFields(logrus.Fields{
+				"file_name":      fileName,
+				"interface_name": interfaceName,
+				"error":          err,
+			}).Error("Failed to delete multinic ifcfg file")
+			output.Errors = append(output.Errors, fmt.Errorf("failed to delete ifcfg file %s: %w", fileName, err))
+		} else {
+			output.DeletedInterfaces = append(output.DeletedInterfaces, interfaceName)
+			output.TotalDeleted++
+			metrics.OrphanedInterfacesDeleted.Inc()
+		}
+	}
+	
+	return output, nil
 }

@@ -13,8 +13,8 @@ go.work
 /dist/
 coverage.out
 coverage.html
-agent
-multinic-agent
+/agent
+/multinic-agent
 
 # IDE
 .vscode/

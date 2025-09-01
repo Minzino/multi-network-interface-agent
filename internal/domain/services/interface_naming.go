@@ -1,13 +1,13 @@
 package services
 
 import (
-	"context"
-	"fmt"
-	"multinic-agent/internal/domain/entities"
-	"multinic-agent/internal/domain/interfaces"
-	"regexp"
-	"strings"
-	"time"
+    "context"
+    "fmt"
+    "multinic-agent/internal/domain/entities"
+    "multinic-agent/internal/domain/interfaces"
+    "regexp"
+    "strings"
+    "time"
 )
 
 // InterfaceNamingService는 네트워크 인터페이스 이름을 관리하는 도메인 서비스입니다
@@ -113,6 +113,51 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	}
 
 	return matches[1], nil
+}
+
+// IsInterfaceUp은 특정 인터페이스가 UP 상태인지 확인합니다
+func (s *InterfaceNamingService) IsInterfaceUp(interfaceName string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// ip link show 명령어로 특정 인터페이스 정보 조회
+	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "link", "show", interfaceName)
+	if err != nil {
+		return false, fmt.Errorf("인터페이스 %s 상태 조회 실패: %w", interfaceName, err)
+	}
+
+	outputStr := string(output)
+	// UP, LOWER_UP 상태 확인 (예: "state UP" 또는 "<BROADCAST,MULTICAST,UP,LOWER_UP>")
+	return strings.Contains(outputStr, "state UP") || 
+		   (strings.Contains(outputStr, ",UP,") && strings.Contains(outputStr, "LOWER_UP")), nil
+}
+
+// GetInterfaceMTU는 특정 인터페이스의 MTU 값을 반환합니다
+func (s *InterfaceNamingService) GetInterfaceMTU(interfaceName string) (int, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second, "ip", "link", "show", interfaceName)
+    if err != nil { return 0, err }
+    re := regexp.MustCompile(`\bmtu\s+(\d+)\b`)
+    m := re.FindStringSubmatch(string(output))
+    if len(m) < 2 { return 0, fmt.Errorf("failed to parse MTU for %s", interfaceName) }
+    // parse int
+    var mtu int
+    _, convErr := fmt.Sscanf(m[1], "%d", &mtu)
+    if convErr != nil { return 0, convErr }
+    return mtu, nil
+}
+
+// GetIPv4WithPrefix는 "A.B.C.D/P" 형태의 IPv4 주소를 반환합니다
+func (s *InterfaceNamingService) GetIPv4WithPrefix(interfaceName string) (string, error) {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second, "ip", "-o", "-4", "addr", "show", "dev", interfaceName)
+    if err != nil { return "", err }
+    re := regexp.MustCompile(`\binet\s+(\d+\.\d+\.\d+\.\d+/\d+)`)
+    m := re.FindStringSubmatch(string(output))
+    if len(m) < 2 { return "", fmt.Errorf("failed to parse IPv4 for %s", interfaceName) }
+    return m[1], nil
 }
 
 // ListNetplanFiles는 지정된 디렉토리의 netplan 파일 목록을 반환합니다

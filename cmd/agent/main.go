@@ -1,14 +1,15 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "strings"
+    "syscall"
+    "time"
 
 	"multinic-agent/internal/application/polling"
 	"multinic-agent/internal/application/usecases"
@@ -87,7 +88,7 @@ func NewApplication(container *container.Container, logger *logrus.Logger) *Appl
 
 // Run은 애플리케이션을 실행합니다
 func (a *Application) Run() error {
-	cfg := a.container.GetConfig()
+    cfg := a.container.GetConfig()
 
 	// OS 타입 감지 및 Info 로그 출력
 	osDetector := a.container.GetOSDetector()
@@ -135,31 +136,46 @@ func (a *Application) Run() error {
 		a.logger.WithField("interval", cfg.Agent.PollInterval).Info("Fixed interval polling enabled")
 	}
 
-	// 폴링 컨트롤러 생성
-	pollingController := polling.NewPollingController(strategy, a.logger)
+    // RUN_MODE=job: 한 번 처리 후 종료
+    if cfg.Agent.RunMode == "job" {
+        a.logger.Info("MultiNIC agent started (run mode: job)")
+        // optional cleanup action
+        action := os.Getenv("AGENT_ACTION")
+        if strings.EqualFold(action, "cleanup") {
+            // 실행: 삭제 유스케이스만 수행
+            deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
+            if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
+                a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
+                a.delayJobExitIfNeeded()
+                return err
+            }
+            a.delayJobExitIfNeeded()
+            return nil
+        }
+        if err := a.processNetworkConfigurations(ctx); err != nil {
+            a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
+            a.delayJobExitIfNeeded()
+            return err
+        }
+        a.delayJobExitIfNeeded()
+        return nil
+    }
 
-	a.logger.Info("MultiNIC agent started")
-
-	// 시그널 처리를 위한 goroutine
-	go func() {
-		<-sigChan
-		a.logger.Info("Received shutdown signal")
-		cancel()
-	}()
-
-	// 폴링 시작
-	return pollingController.Start(ctx, func(ctx context.Context) error {
-		err := a.processNetworkConfigurations(ctx)
-		if err != nil {
-			a.logger.WithError(err).Error("Failed to process network configurations")
-			a.container.GetHealthService().UpdateDBHealth(false, err)
-			metrics.SetDBConnectionStatus(false)
-			return err
-		}
-		a.container.GetHealthService().UpdateDBHealth(true, nil)
-		metrics.SetDBConnectionStatus(true)
-		return nil
-	})
+    // 서비스 모드: 폴링 컨트롤러 시작
+    pollingController := polling.NewPollingController(strategy, a.logger)
+    a.logger.Info("MultiNIC agent started")
+    go func() { <-sigChan; a.logger.Info("Received shutdown signal"); cancel() }()
+    return pollingController.Start(ctx, func(ctx context.Context) error {
+        if err := a.processNetworkConfigurations(ctx); err != nil {
+            a.logger.WithError(err).Error("Failed to process network configurations")
+            a.container.GetHealthService().UpdateDBHealth(false, err)
+            metrics.SetDBConnectionStatus(false)
+            return err
+        }
+        a.container.GetHealthService().UpdateDBHealth(true, nil)
+        metrics.SetDBConnectionStatus(true)
+        return nil
+    })
 }
 
 // startHealthServer는 헬스체크 서버를 시작합니다
@@ -186,39 +202,36 @@ func (a *Application) startHealthServer(port string) error {
 	return nil
 }
 
+// delayJobExitIfNeeded는 Job 모드에서 종료 전 대기 시간을 적용합니다.
+func (a *Application) delayJobExitIfNeeded() {
+    // JOB_EXIT_DELAY_SECONDS 환경변수 (기본 5초)
+    delayStr := os.Getenv("JOB_EXIT_DELAY_SECONDS")
+    if strings.TrimSpace(delayStr) == "" { delayStr = "5" }
+    d, err := time.ParseDuration(delayStr + "s")
+    if err != nil || d <= 0 { return }
+    a.logger.WithField("delay", d.String()).Info("Delaying job exit for inspection")
+    time.Sleep(d)
+}
+
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
 func (a *Application) processNetworkConfigurations(ctx context.Context) error {
-	startTime := time.Now()
+    startTime := time.Now()
 
-	// 호스트네임 가져오기
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-
-	// .novalocal 또는 다른 도메인 접미사 제거
-	originalHostname := hostname
-	if idx := strings.Index(hostname, "."); idx != -1 {
-		hostname = hostname[:idx]
-	}
-
-	// 호스트명 변경사항 디버그 로그
-	if originalHostname != hostname {
-		a.logger.WithFields(logrus.Fields{
-			"original_hostname": originalHostname,
-			"cleaned_hostname":  hostname,
-		}).Debug("Hostname domain suffix removed")
-	}
+    // 노드 이름 결정: NODE_NAME(env) -> cleaned hostname
+    hostname, err := resolveNodeName(a.logger)
+    if err != nil {
+        return err
+    }
 
 	// 1. 네트워크 설정 유스케이스 실행 (생성/수정)
 	configInput := usecases.ConfigureNetworkInput{
 		NodeName: hostname,
 	}
 
-	configOutput, err := a.configureUseCase.Execute(ctx, configInput)
-	if err != nil {
-		return err
-	}
+    configOutput, err := a.configureUseCase.Execute(ctx, configInput)
+    if err != nil {
+        return err
+    }
 
 	// 2. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 정리)
 	deleteInput := usecases.DeleteNetworkInput{
@@ -244,23 +257,67 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		healthService.IncrementFailedConfigs()
 	}
 
-	// 실제로 처리된 것이 있을 때만 로그 출력
-	if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || (deleteOutput != nil && deleteOutput.TotalDeleted > 0) {
-		deletedTotal := 0
-		deleteErrors := 0
-		if deleteOutput != nil {
-			deletedTotal = deleteOutput.TotalDeleted
-			deleteErrors = len(deleteOutput.Errors)
-		}
+    // 실패 여부 선계산 및 부분 실패 처리 정책 적용
+    var resultErr error
+    if configOutput != nil && configOutput.FailedCount > 0 {
+        // 부분 실패 정책: 일부 성공 + 일부 실패인 경우에도 Job을 성공(0)으로 처리할지
+        completeOnPartial := strings.EqualFold(strings.TrimSpace(os.Getenv("JOB_COMPLETE_ON_PARTIAL_FAILURE")), "true") || os.Getenv("JOB_COMPLETE_ON_PARTIAL_FAILURE") == ""
+        allFailed := (configOutput.ProcessedCount == 0)
+        partialFailed := (configOutput.ProcessedCount > 0 && configOutput.FailedCount > 0)
+        if allFailed {
+            resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+        } else if partialFailed {
+            if !completeOnPartial {
+                resultErr = fmt.Errorf("network configuration partially failed: %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+            }
+        } else {
+            // shouldn't happen (only failed without processed counted), keep error
+            resultErr = fmt.Errorf("network configuration failed for %d/%d interfaces", configOutput.FailedCount, configOutput.TotalCount)
+        }
+    }
 
-		a.logger.WithFields(logrus.Fields{
-			"config_processed": configOutput.ProcessedCount,
-			"config_failed":    configOutput.FailedCount,
-			"config_total":     configOutput.TotalCount,
-			"deleted_total":    deletedTotal,
-			"delete_errors":    deleteErrors,
-		}).Info("Network processing completed")
-	}
+    // 실제로 처리된 것이 있을 때만 로그 출력
+    if configOutput.ProcessedCount > 0 || configOutput.FailedCount > 0 || (deleteOutput != nil && deleteOutput.TotalDeleted > 0) {
+        deletedTotal := 0
+        deleteErrors := 0
+        if deleteOutput != nil {
+            deletedTotal = deleteOutput.TotalDeleted
+            deleteErrors = len(deleteOutput.Errors)
+        }
+
+        fields := logrus.Fields{
+            "config_processed": configOutput.ProcessedCount,
+            "config_failed":    configOutput.FailedCount,
+            "config_total":     configOutput.TotalCount,
+            "deleted_total":    deletedTotal,
+            "delete_errors":    deleteErrors,
+        }
+        if resultErr != nil {
+            a.logger.WithFields(fields).Error("Network processing completed with failures")
+        } else {
+            a.logger.WithFields(fields).Info("Network processing completed")
+        }
+
+        // 종료 메시지(termination log)에 요약 정보 기록 (Controller가 읽어 로그로 표출 가능)
+        // 포맷: JSON {node, processed, failed, total, failures[], deleted_total, delete_errors, timestamp}
+        // 노드 이름은 위에서 resolveNodeName으로 구함
+        summary := map[string]any{
+            "node":          hostname,
+            "processed":     configOutput.ProcessedCount,
+            "failed":        configOutput.FailedCount,
+            "total":         configOutput.TotalCount,
+            "failures":      configOutput.Failures,
+            "deleted_total": deletedTotal,
+            "delete_errors": deleteErrors,
+            "timestamp":     time.Now().Format(time.RFC3339),
+        }
+        if b, err := json.Marshal(summary); err == nil {
+            // Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
+            _ = os.WriteFile("/dev/termination-log", b, 0644)
+        } else {
+            a.logger.WithError(err).Warn("Failed to marshal termination summary JSON")
+        }
+    }
 
 	// 삭제 에러가 있다면 별도로 로깅
 	if len(deleteOutput.Errors) > 0 {
@@ -269,10 +326,11 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		}
 	}
 
-	// 폴링 사이클 메트릭 기록
-	metrics.RecordPollingCycle(time.Since(startTime).Seconds())
+    // 폴링 사이클 메트릭 기록
+    metrics.RecordPollingCycle(time.Since(startTime).Seconds())
 
-	return nil
+    // 설정 실패가 하나라도 있으면 에러 반환 (job 모드에서 비정상 종료 유도)
+    return resultErr
 }
 
 // shutdown은 애플리케이션을 정리하고 종료합니다
@@ -300,5 +358,36 @@ func (s *fixedIntervalStrategy) NextInterval(success bool) time.Duration {
 }
 
 func (s *fixedIntervalStrategy) Reset() {
-	// 고정 간격이므로 리셋할 것이 없음
+    // 고정 간격이므로 리셋할 것이 없음
+}
+
+// resolveNodeName은 환경변수 NODE_NAME(Downward API의 spec.nodeName 주입)을 우선 사용하고,
+// 없으면 os.Hostname()에서 도메인 접미사를 제거해 반환합니다.
+func resolveNodeName(logger *logrus.Logger) (string, error) {
+    if v := os.Getenv("NODE_NAME"); strings.TrimSpace(v) != "" {
+        return v, nil
+    }
+    // 보조 키도 확인 (환경에 따라 이름이 다를 수 있음)
+    if v := os.Getenv("MY_NODE_NAME"); strings.TrimSpace(v) != "" {
+        return v, nil
+    }
+    hn, err := os.Hostname()
+    if err != nil {
+        return "", err
+    }
+    cleaned := cleanHostnameDomainSuffix(hn)
+    if hn != cleaned {
+        logger.WithFields(logrus.Fields{
+            "original_hostname": hn,
+            "cleaned_hostname":  cleaned,
+        }).Debug("Hostname domain suffix removed")
+    }
+    return cleaned, nil
+}
+
+func cleanHostnameDomainSuffix(h string) string {
+    if idx := strings.Index(h, "."); idx != -1 {
+        return h[:idx]
+    }
+    return h
 }

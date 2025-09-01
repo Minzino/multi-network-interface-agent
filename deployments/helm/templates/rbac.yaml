@@ -5,13 +5,35 @@ metadata:
   name: {{ include "multinic-agent.fullname" . }}
   labels:
     {{- include "multinic-agent.labels" . | nindent 4 }}
+  annotations: {}
 rules:
 - apiGroups: [""]
   resources: ["nodes"]
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "list"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "watch", "delete"]
+- apiGroups: ["multinic.io"]
+  resources: ["multinicnodeconfigs"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "multinic-agent.fullname" . }}-status
+  labels:
+    {{- include "multinic-agent.labels" . | nindent 4 }}
+  annotations: {}
+rules:
+- apiGroups: ["multinic.io"]
+  resources: ["multinicnodeconfigs/status"]
+  verbs: ["update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -19,10 +41,27 @@ metadata:
   name: {{ include "multinic-agent.fullname" . }}
   labels:
     {{- include "multinic-agent.labels" . | nindent 4 }}
+  annotations: {}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "multinic-agent.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "multinic-agent.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "multinic-agent.fullname" . }}-status
+  labels:
+    {{- include "multinic-agent.labels" . | nindent 4 }}
+  annotations: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "multinic-agent.fullname" . }}-status
 subjects:
 - kind: ServiceAccount
   name: {{ include "multinic-agent.serviceAccountName" . }}

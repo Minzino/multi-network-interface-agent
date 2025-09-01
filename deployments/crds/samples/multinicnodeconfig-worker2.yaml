@@ -1,0 +1,17 @@
+apiVersion: multinic.io/v1alpha1
+kind: MultiNicNodeConfig
+metadata:
+  name: viola2-biz-worker02
+  namespace: multinic-system
+  labels:
+    multinic.io/node-name: viola2-biz-worker02
+    multinic.io/instance-id: ba35d476-f810-45a8-b386-270712be6db3
+spec:
+  nodeName: viola2-biz-worker02
+  instanceId: ba35d476-f810-45a8-b386-270712be6db3
+  interfaces:
+    - id: 1
+      macAddress: "fa:16:3e:ca:29:c1"
+      address: "11.11.11.38"
+      cidr: "11.11.11.0/24"
+      mtu: 1450

@@ -3,7 +3,7 @@
 # 변수
 BINARY_NAME=multinic-agent
 DOCKER_IMAGE=multinic-agent
-VERSION?=latest
+VERSION?=1.0.0
 NAMESPACE?=default
 
 # Go 관련 변수
@@ -17,6 +17,10 @@ all: test build
 build:
 	@echo ">>> 바이너리 빌드 중..."
 	@go build -o $(GOBIN)/$(BINARY_NAME) cmd/agent/main.go
+
+build-controller:
+	@echo ">>> Controller 바이너리 빌드 중..."
+	@go build -o $(GOBIN)/multinic-controller cmd/controller/main.go
 
 # 테스트
 test:
