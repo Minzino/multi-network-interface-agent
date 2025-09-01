@@ -11,7 +11,17 @@ spec:
   instanceId: b4975c5f-50bb-479f-9e7b-a430815ae852
   interfaces:
     - id: 1
-      macAddress: "fa:16:3e:1c:1a:6e"
-      address: "11.11.11.37"
+      macAddress: "fa:16:3e:00:8a:71"
+      address: "11.11.11.188"
       cidr: "11.11.11.0/24"
       mtu: 1450
+#    - id: 2
+#      macAddress: "fa:16:3e:e6:93:37"
+#      address: "11.11.11.82"
+#      cidr: "11.11.11.0/24"
+#      mtu: 1450
+#    - id: 3
+#      macAddress: "fa:16:3e:0f:4c:ca"
+#      address: "11.11.11.94"
+#      cidr: "11.11.11.0/24"
+#      mtu: 1450
