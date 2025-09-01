@@ -293,7 +293,6 @@ kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-con
 **이 단계에서 생성되는 리소스:**
 - ✅ **Controller Deployment**: CR 감시 및 Agent Job 스케줄링
 - ✅ **ServiceAccount + RBAC**: Job 생성 권한 설정
-- ✅ **ConfigMap + Secret**: 설정 및 인증 정보
 - 🔄 **자동화 시작**: 이제 CR 생성 시 자동으로 Agent Job 실행
 
 ### 업그레이드
