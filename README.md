@@ -218,17 +218,105 @@ vi scripts/deploy.sh
 # SSH_PASSWORD=${SSH_PASSWORD:-"YOUR_SSH_PASSWORD"} → 실제 패스워드로 변경
 ```
 
-### 2. 원클릭 배포
+## 🚀 빠른 시작
+
+### 사전 요구사항
+- Kubernetes 1.24+
+- Helm 3.0+
+- kubectl
+- nerdctl (컨테이너 런타임)
+
+### 설치
+
+#### 1단계: 컨테이너 이미지 배포
+```bash
+# 사전 빌드된 이미지 사용 (권장)
+# deployments/images/ 디렉토리에 있는 tar 파일을 모든 노드에 배포
+
+# 방법 1: 스크립트로 모든 노드에 배포 (권장)
+NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
+for node in "${NODES[@]}"; do
+    echo "Deploying to $node..."
+    scp deployments/images/multinic-agent-1.0.0.tar root@$node:/tmp/
+    ssh root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
+done
+
+# 방법 2: 개별 노드에 수동 배포
+scp deployments/images/multinic-agent-1.0.0.tar root@192.168.1.10:/tmp/
+ssh root@192.168.1.10 "nerdctl load -i /tmp/multinic-agent-1.0.0.tar"
+
+# 방법 3: 직접 빌드 (개발용)
+nerdctl build -t multinic-agent:1.0.0 .
+```
+
+#### 2단계: 네임스페이스 생성
+```bash
+kubectl create namespace multinic-system
+```
+
+#### 3단계: CRD 설치
+```bash
+# MultiNicNodeConfig CRD 설치
+kubectl apply -f deployments/crds/multinicnodeconfig-crd.yaml
+
+# CRD 설치 확인
+kubectl get crd multinicnodeconfigs.multinic.io
+```
+
+#### 4단계: MultiNic Agent 설치
+```bash
+helm install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set image.tag=1.0.0 \
+  --set controller.replicas=1 \
+  --wait --timeout=300s
+```
+
+### 업그레이드
+```bash
+# 차트 업그레이드
+helm upgrade multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set image.tag=1.0.1 \
+  --wait --timeout=300s
+```
+
+### 제거
+```bash
+# 차트 제거
+helm uninstall multinic-agent -n multinic-system
+
+# CRD 제거 (선택사항)
+kubectl delete crd multinicnodeconfigs.multinic.io
+
+# 네임스페이스 제거 (선택사항)
+kubectl delete namespace multinic-system
+```
+
+## 🚀 원클릭 배포 (자동화)
+
+이 Helm 차트는 MultiNic Agent의 모든 컴포넌트를 Kubernetes 클러스터에 배포하고 관리합니다.
+
+```bash
+vi ./scripts/deploy.sh
+
+SSH_PASSWORD=${SSH_PASSWORD:-"배포 대상 ssh password 입력"}
+
+저장 후 deploy.sh 실행
+```
+
 ```bash
 # 자동 배포 실행
 ./scripts/deploy.sh
 ```
 
-배포 스크립트가 자동으로 수행하는 작업:
-1. 이미지 빌드 (`nerdctl build`)
-2. 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
-3. CRD 설치 (`kubectl apply`)
-4. Helm 차트 배포 (`helm upgrade --install`)
+**배포 스크립트 기능:**
+- ✅ 필수 도구 확인 (`nerdctl`, `helm`, `kubectl`, `sshpass`)
+- 🔨 이미지 빌드 (`nerdctl build`)
+- 📦 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
+- 🎯 CRD 설치 (`kubectl apply`)
+- ⚙️ Helm 차트 배포 (`helm upgrade --install`)
+- ✅ 배포 상태 확인
 
 ## ✅ 배포 완료 확인
 
@@ -257,17 +345,11 @@ kubectl get jobs -n multinic-system -l app.kubernetes.io/name=multinic-agent
 ```bash
 # CR 상태가 "Configured"인지 확인
 kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metadata.name,STATE:.status.state
-
-# 실제 인터페이스 생성 확인
-kubectl exec -n multinic-system <job-pod> -- ip addr show | grep multinic
-
-# 성공 로그 확인
-kubectl logs -n multinic-system <job-name> | grep "processed="
 ```
 
-**예상 성공 결과**:
+**예상 성공 결과**
 ```
-STATE: Configured
-job summary: processed=4 failed=0 total=4
-multinic0, multinic1 인터페이스 생성 확인
+root@bastion:~/multinic-agent# kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metadata.name,STATE:.status.state
+NAME                  STATE
+viola2-biz-master03   Configured
 ```
