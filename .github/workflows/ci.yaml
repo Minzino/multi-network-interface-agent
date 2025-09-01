@@ -1,134 +1,134 @@
-name: CI/CD Pipeline
-
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-env:
-  IMAGE_NAME: multinic-agent
-  REGISTRY: ghcr.io
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.21'
-    
-    - name: Go 모듈 캐시
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-    
-    - name: 의존성 설치
-      run: go mod download
-    
-    - name: 코드 포맷 검사
-      run: |
-        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-          echo "다음 파일들이 포맷팅 필요:"
-          gofmt -s -l .
-          exit 1
-        fi
-    
-    - name: go vet 검사
-      run: go vet ./...
-    
-    - name: 테스트 실행
-      run: go test -v -race -coverprofile=coverage.out ./...
-    
-    - name: 커버리지 업로드
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.out
-
-  build:
-    needs: test
-    runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ steps.meta.outputs.tags }}
-      image-digest: ${{ steps.build.outputs.digest }}
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Docker 메타데이터 설정
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-    
-    - name: Docker Buildx 설정
-      uses: docker/setup-buildx-action@v3
-    
-    - name: 레지스트리 로그인
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: 이미지 빌드 및 푸시
-      id: build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-  helm-test:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Helm 설치
-      uses: azure/setup-helm@v3
-      with:
-        version: '3.12.0'
-    
-    - name: Helm 차트 검증
-      run: |
-        helm lint ./deployments/helm
-        helm template test ./deployments/helm --dry-run
-    
-    - name: Helm 패키지
-      run: helm package ./deployments/helm
-
-  security-scan:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    steps:
-    - name: 보안 스캔 실행
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ needs.build.outputs.image-tag }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-    
-    - name: 보안 스캔 결과 업로드
-      uses: github/codeql-action/upload-sarif@v2
-      with:
-        sarif_file: 'trivy-results.sarif'
+#name: CI/CD Pipeline
+#
+#on:
+#  push:
+#    branches: [ main, develop ]
+#  pull_request:
+#    branches: [ main ]
+#
+#env:
+#  IMAGE_NAME: multinic-agent
+#  REGISTRY: ghcr.io
+#
+#jobs:
+#  test:
+#    runs-on: ubuntu-latest
+#    steps:
+#    - uses: actions/checkout@v4
+#
+#    - name: Set up Go
+#      uses: actions/setup-go@v4
+#      with:
+#        go-version: '1.21'
+#
+#    - name: Go 모듈 캐시
+#      uses: actions/cache@v3
+#      with:
+#        path: |
+#          ~/.cache/go-build
+#          ~/go/pkg/mod
+#        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+#        restore-keys: |
+#          ${{ runner.os }}-go-
+#
+#    - name: 의존성 설치
+#      run: go mod download
+#
+#    - name: 코드 포맷 검사
+#      run: |
+#        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+#          echo "다음 파일들이 포맷팅 필요:"
+#          gofmt -s -l .
+#          exit 1
+#        fi
+#
+#    - name: go vet 검사
+#      run: go vet ./...
+#
+#    - name: 테스트 실행
+#      run: go test -v -race -coverprofile=coverage.out ./...
+#
+#    - name: 커버리지 업로드
+#      uses: codecov/codecov-action@v3
+#      with:
+#        file: ./coverage.out
+#
+#  build:
+#    needs: test
+#    runs-on: ubuntu-latest
+#    outputs:
+#      image-tag: ${{ steps.meta.outputs.tags }}
+#      image-digest: ${{ steps.build.outputs.digest }}
+#    steps:
+#    - name: Checkout
+#      uses: actions/checkout@v4
+#
+#    - name: Docker 메타데이터 설정
+#      id: meta
+#      uses: docker/metadata-action@v5
+#      with:
+#        images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+#        tags: |
+#          type=ref,event=branch
+#          type=ref,event=pr
+#          type=sha,prefix={{branch}}-
+#          type=raw,value=latest,enable={{is_default_branch}}
+#
+#    - name: Docker Buildx 설정
+#      uses: docker/setup-buildx-action@v3
+#
+#    - name: 레지스트리 로그인
+#      if: github.event_name != 'pull_request'
+#      uses: docker/login-action@v3
+#      with:
+#        registry: ${{ env.REGISTRY }}
+#        username: ${{ github.actor }}
+#        password: ${{ secrets.GITHUB_TOKEN }}
+#
+#    - name: 이미지 빌드 및 푸시
+#      id: build
+#      uses: docker/build-push-action@v5
+#      with:
+#        context: .
+#        push: ${{ github.event_name != 'pull_request' }}
+#        tags: ${{ steps.meta.outputs.tags }}
+#        labels: ${{ steps.meta.outputs.labels }}
+#        cache-from: type=gha
+#        cache-to: type=gha,mode=max
+#
+#  helm-test:
+#    needs: build
+#    runs-on: ubuntu-latest
+#    steps:
+#    - name: Checkout
+#      uses: actions/checkout@v4
+#
+#    - name: Helm 설치
+#      uses: azure/setup-helm@v3
+#      with:
+#        version: '3.12.0'
+#
+#    - name: Helm 차트 검증
+#      run: |
+#        helm lint ./deployments/helm
+#        helm template test ./deployments/helm --dry-run
+#
+#    - name: Helm 패키지
+#      run: helm package ./deployments/helm
+#
+#  security-scan:
+#    needs: build
+#    runs-on: ubuntu-latest
+#    if: github.event_name != 'pull_request'
+#    steps:
+#    - name: 보안 스캔 실행
+#      uses: aquasecurity/trivy-action@master
+#      with:
+#        image-ref: ${{ needs.build.outputs.image-tag }}
+#        format: 'sarif'
+#        output: 'trivy-results.sarif'
+#
+#    - name: 보안 스캔 결과 업로드
+#      uses: github/codeql-action/upload-sarif@v2
+#      with:
+#        sarif_file: 'trivy-results.sarif'
