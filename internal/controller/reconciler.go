@@ -33,7 +33,7 @@ var nodeCRGVR = schema.GroupVersionResource{Group: "multinic.io", Version: "v1al
 
 // Reconcile ensures a Job exists targeting the node specified by the MultiNicNodeConfig
 func (c *Controller) Reconcile(ctx context.Context, namespace, name string) error {
-    log.Printf("reconcile: ns=%s name=%s", namespace, name)
+    // Debug: log.Printf("reconcile: ns=%s name=%s", namespace, name) - removed for cleaner output
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
     if err != nil {
         log.Printf("reconcile get CR error: %v", err)
@@ -52,7 +52,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     specChanged := observedGen == 0 || specGen != observedGen
     // If already in final state and spec hasn't changed, skip scheduling
     if (currentState == "Configured" || currentState == "Failed") && !specChanged {
-        log.Printf("reconcile: CR %s/%s is already in final state '%s' with no spec change, skipping job creation", namespace, name, currentState)
+        // Debug: log.Printf("[%s] Already %s - skipping", name, currentState)
         return nil
     }
     
@@ -152,14 +152,14 @@ func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
     if err != nil { return err }
     for i := range list.Items {
         name := list.Items[i].GetName()
-        log.Printf("processAll reconcile: %s/%s", namespace, name)
+        // Debug: processAll reconcile removed for cleaner output
         if err := c.Reconcile(ctx, namespace, name); err != nil {
             return err
         }
         
         // Also update interface states to keep CR status current
         if err := c.updateInterfaceStates(ctx, namespace, name); err != nil {
-            log.Printf("processAll: failed to update interface states for %s/%s: %v", namespace, name, err)
+            // Debug: log.Printf("processAll: failed to update interface states for %s/%s: %v", namespace, name, err)
             // Don't return error for interface state updates, just log
         }
     }
@@ -666,19 +666,19 @@ func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
 // updateInterfaceStates periodically updates the interface states in the CR status 
 // by checking the actual node interface states via API or node status
 func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeName string) error {
-    log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
+    // Debug: log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
     
     // Get the CR for this node
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil {
-        log.Printf("updateInterfaceStates: failed to get CR for node %s: %v", nodeName, err)
+        // Debug: log.Printf("updateInterfaceStates: failed to get CR for node %s: %v", nodeName, err)
         return err
     }
     
     // Get node information to check actual interface states
     node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil {
-        log.Printf("updateInterfaceStates: failed to get node %s: %v", nodeName, err)
+        // Debug: log.Printf("updateInterfaceStates: failed to get node %s: %v", nodeName, err)
         return err
     }
     
@@ -697,8 +697,8 @@ func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeN
         "nodeReady": c.isNodeReady(node),
     })
     
-    log.Printf("updateInterfaceStates: updated interface states for node %s with %d interfaces", 
-        nodeName, len(interfaceStatuses))
+    // Debug: log.Printf("updateInterfaceStates: updated interface states for node %s with %d interfaces", 
+    //     nodeName, len(interfaceStatuses))
     
     return nil
 }
