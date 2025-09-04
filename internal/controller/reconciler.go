@@ -56,8 +56,10 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         return nil
     }
     
-    // Log interface details
-    c.logInterfaceDetails(u, nodeName)
+    // Log interface details only when actually processing new changes
+    if specChanged || currentState == "Pending" || currentState == "" {
+        c.logInterfaceDetails(u, nodeName)
+    }
     
     // instance-id verification via spec.instanceId or label
     instanceID := nestedString(u, "spec", "instanceId")
@@ -633,8 +635,14 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         // Use interface name as key in the map
         interfaceStatuses[interfaceName] = interfaceStatus
         
-        log.Printf("Interface[%d] status: ID=%d, MAC=%s, IP=%s, Status=%s, Reason=%s", 
-            i, id, macAddress, ipAddress, status, reason)
+        // Log only meaningful status changes, not every build
+        if status == "InProgress" && reason == "SpecChanged" {
+            log.Printf("Interface %s: %s → InProgress (spec changed)", interfaceName, "Pending")
+        } else if status == "Configured" && reason == "JobSucceeded" {
+            log.Printf("Interface %s: InProgress → Configured ✓", interfaceName)
+        } else if status == "Failed" {
+            log.Printf("Interface %s: InProgress → Failed ✗", interfaceName)
+        }
     }
     
     return interfaceStatuses
@@ -759,11 +767,15 @@ func (c *Controller) getActualInterfaceState(node *corev1.Node, macAddress, inte
     
     // For now, we'll return a placeholder based on node readiness
     // This should be enhanced to actually check interface state
+    // Parameters macAddress and interfaceName would be used for detailed interface verification
     
     // Check node addresses to see if we can infer interface state
     for _, addr := range node.Status.Addresses {
         if addr.Type == corev1.NodeInternalIP {
             // If node has internal IP, assume basic networking is working
+            // Future: use macAddress and interfaceName for specific interface checks
+            _ = macAddress    // suppress unused warning - would be used for MAC verification
+            _ = interfaceName // suppress unused warning - would be used for interface name checks
             return "Configured"
         }
     }

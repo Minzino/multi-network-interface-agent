@@ -412,6 +412,9 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 
 			// Mock 설정
 			tt.setupMocks(mockRepo, mockConfigurer, mockRollbacker, mockFS, mockOSDetector)
+			
+			// Add Rollback mock for validation tests
+			mockRollbacker.On("Rollback", mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()
 
 			// Mock CommandExecutor 생성
 			mockExecutor := new(MockCommandExecutor)
@@ -419,6 +422,8 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
 			// RHEL nmcli 명령어 mocks (naming service에서 사용)
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			// ip 명령어 mocks (MAC 주소 조회용)
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "addr", "show", mock.AnythingOfType("string")).Return([]byte(""), nil).Maybe()
 
 			// 네이밍 서비스 생성
 			namingService := services.NewInterfaceNamingService(mockFS, mockExecutor)
@@ -502,11 +507,16 @@ func TestConfigureNetworkUseCase_processInterface(t *testing.T) {
 
 			// Mock 설정
 			tt.setupMocks(mockConfigurer, mockRollbacker, mockFS)
+			
+			// Add Rollback mock for validation tests  
+			mockRollbacker.On("Rollback", mock.Anything, mock.AnythingOfType("string")).Return(nil).Maybe()
 
 			// 기본 컨테이너 환경 체크 설정
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
 			// RHEL nmcli 명령어 mocks (naming service에서 사용)
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+			// ip 명령어 mocks (MAC 주소 조회용)
+			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "addr", "show", mock.AnythingOfType("string")).Return([]byte(""), nil).Maybe()
 
 			// 네이밍 서비스 생성
 			namingService := services.NewInterfaceNamingService(mockFS, mockExecutor)

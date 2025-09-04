@@ -50,7 +50,7 @@ func TestReconcile_CreatesJobWithOSAwareMounts_RHEL(t *testing.T) {
     err := c.Reconcile(context.Background(), "multinic-system", "worker-node-01")
     if err != nil { t.Fatalf("reconcile error: %v", err) }
 
-    job, err := kclient.BatchV1().Jobs("multinic-system").Get(context.Background(), "multinic-agent-worker-node-01", metav1.GetOptions{})
+    job, err := kclient.BatchV1().Jobs("multinic-system").Get(context.Background(), "multinic-agent-worker-node-01-g0", metav1.GetOptions{})
     if err != nil { t.Fatalf("job not found: %v", err) }
 
     assertRHELJob(t, job)
