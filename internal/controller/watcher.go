@@ -45,7 +45,10 @@ func (w *Watcher) Start(ctx context.Context) error {
 
     crInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
         AddFunc: func(obj interface{}) { log.Printf("CR add event"); w.handleCR(obj) },
-        UpdateFunc: func(oldObj, newObj interface{}) { log.Printf("CR update event"); w.handleCR(newObj) },
+        UpdateFunc: func(oldObj, newObj interface{}) { 
+            // CR update events can be frequent - reduced logging for cleaner output
+            w.handleCR(newObj) 
+        },
         DeleteFunc: func(obj interface{}) { 
             log.Printf("CR delete event - about to call handleCRDelete with obj type=%T", obj)
             w.handleCRDelete(obj) 
