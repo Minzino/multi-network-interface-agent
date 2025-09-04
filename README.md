@@ -112,6 +112,32 @@ sequenceDiagram
     Controller->>K8s: Job 정리 (TTL)
 ```
 
+## ⚙️ Agent Job 동작(중요 변경)
+
+- 시작 시 정리 수행(RUN_MODE=job):
+  - Ubuntu: `/etc/netplan/9*-multinic*.yaml`만 삭제 후 `netplan apply` 실행
+  - RHEL: `/etc/sysconfig/network-scripts/ifcfg-multinic*`만 삭제
+  - 시스템 기본 파일(`50-cloud-init.yaml` 등)은 건드리지 않음
+  - 남아있는 `multinic0~9` 인터페이스는 DOWN 상태일 때만 altname(ens*/enp*)으로 rename 시도(없으면 스킵)
+- 이름 충돌 방지(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
+- 검증 방식 전환(이름→MAC):
+  - 적용 후 검증은 `ip -o link show` 전체에서 CR의 MAC 존재 여부로 판단(특정 이름에 의존하지 않음)
+- 처리 순서: “정리 → 설정(적용) → 검증”으로 실행
+- 종료 지연: `JOB_EXIT_DELAY_SECONDS`(기본 5초) 동안 종료 지연해 로그/요약 수집 용이
+
+권장 값(초기 구동 안정화):
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  -n multinic-system \
+  --set agent.maxConcurrentTasks=1   # 초기엔 1로 권장(이름 경합 최소화)
+```
+
+수동 전체 정리(옵션):
+```bash
+# 컨트롤러가 생성하는 Job에 환경변수로 전달되면 모든 multinic 파일만 정리
+AGENT_ACTION=cleanup
+```
+
 ## 📦 패키지 구조
 
 ```
@@ -282,6 +308,7 @@ kubectl get crd multinicnodeconfigs.multinic.io
 # Controller Deployment + RBAC + ServiceAccount 생성
 helm install multinic-agent ./deployments/helm \
   --namespace multinic-system \
+  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.0 \
   --set controller.replicas=1 \
   --wait --timeout=300s
@@ -300,6 +327,7 @@ kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-con
 # 차트 업그레이드
 helm upgrade multinic-agent ./deployments/helm \
   --namespace multinic-system \
+  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.1 \
   --wait --timeout=300s
 ```
