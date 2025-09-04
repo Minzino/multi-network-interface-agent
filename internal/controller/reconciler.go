@@ -99,7 +99,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     // Mark CR as InProgress with interface details and record observedGeneration/spec hash
     reason := "JobScheduled"
     if specChanged { reason = "SpecChanged" }
-    interfaceStatuses := c.buildInterfaceStatuses(u, "InProgress", reason)
+    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "InProgress", reason)
     _ = c.updateCRStatus(ctx, u, map[string]any{
         "state":              "InProgress",
         "observedGeneration": specGen,
@@ -114,7 +114,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
 
     // If a job with the same generation-aware name exists, skip creating
     if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
-        log.Printf("job already exists: %s/%s", namespace, job.Name)
+        // Job already exists - this is expected behavior, no need to log
         return nil
     }
     if _, err := c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
@@ -238,7 +238,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 }
                 if !handledPartial {
                     // 완전 성공 케이스
-                    interfaceStatuses := c.buildInterfaceStatuses(u, "Configured", "JobSucceeded")
+                    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
                     _ = c.updateCRStatus(ctx, u, map[string]any{
                         "state": "Configured",
                         "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
@@ -322,7 +322,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 }
                 // Fallback: if we couldn't compute per-interface, mark all as Failed
                 if len(statuses) == 0 {
-                    statuses = c.buildInterfaceStatuses(u, "Failed", reason)
+                    statuses = c.buildInterfaceStatuses(u, nodeName, "Failed", reason)
                 }
                 statusPatch := map[string]any{
                     "state": "Failed",
@@ -594,7 +594,7 @@ func getIntFromMap(m map[string]interface{}, key string) int {
 
 // buildInterfaceStatuses creates detailed status information for each interface in the CR
 // Returns a map where keys are interface names (multinic0, multinic1, etc.)
-func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status, reason string) map[string]any {
+func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeName, status, reason string) map[string]any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
         log.Printf("No interfaces found when building status for CR %s/%s", u.GetNamespace(), u.GetName())
@@ -637,9 +637,9 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         
         // Log only final state changes to reduce noise
         if status == "Configured" && reason == "JobSucceeded" {
-            log.Printf("Interface %s: Configured ✓", interfaceName)
+            log.Printf("[%s] Interface %s: Configured ✓", nodeName, interfaceName)
         } else if status == "Failed" {
-            log.Printf("Interface %s: Failed ✗", interfaceName)
+            log.Printf("[%s] Interface %s: Failed ✗", nodeName, interfaceName)
         }
         // Skip InProgress logging to avoid repetition
     }

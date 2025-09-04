@@ -55,8 +55,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 
     w.JobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
         UpdateFunc: func(oldObj, newObj interface{}) {
-            // On job status change, update CR statuses
-            log.Printf("Job update event - processing jobs")
+            // On job status change, update CR statuses (reduced logging)
             _ = w.Ctrl.ProcessJobs(context.Background(), w.Namespace)
         },
     })
