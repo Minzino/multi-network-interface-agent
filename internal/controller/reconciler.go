@@ -33,7 +33,7 @@ var nodeCRGVR = schema.GroupVersionResource{Group: "multinic.io", Version: "v1al
 
 // Reconcile ensures a Job exists targeting the node specified by the MultiNicNodeConfig
 func (c *Controller) Reconcile(ctx context.Context, namespace, name string) error {
-    log.Printf("reconcile: ns=%s name=%s", namespace, name)
+    // Debug: log.Printf("reconcile: ns=%s name=%s", namespace, name) - removed for cleaner output
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
     if err != nil {
         log.Printf("reconcile get CR error: %v", err)
@@ -52,12 +52,14 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     specChanged := observedGen == 0 || specGen != observedGen
     // If already in final state and spec hasn't changed, skip scheduling
     if (currentState == "Configured" || currentState == "Failed") && !specChanged {
-        log.Printf("reconcile: CR %s/%s is already in final state '%s' with no spec change, skipping job creation", namespace, name, currentState)
+        // Debug: log.Printf("[%s] Already %s - skipping", name, currentState)
         return nil
     }
     
-    // Log interface details
-    c.logInterfaceDetails(u, nodeName)
+    // Log interface details only when first processing (not on subsequent updates)
+    if currentState == "" && observedGen == 0 {
+        c.logInterfaceDetails(u, nodeName)
+    }
     
     // instance-id verification via spec.instanceId or label
     instanceID := nestedString(u, "spec", "instanceId")
@@ -97,7 +99,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
     // Mark CR as InProgress with interface details and record observedGeneration/spec hash
     reason := "JobScheduled"
     if specChanged { reason = "SpecChanged" }
-    interfaceStatuses := c.buildInterfaceStatuses(u, "InProgress", reason)
+    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "InProgress", reason)
     _ = c.updateCRStatus(ctx, u, map[string]any{
         "state":              "InProgress",
         "observedGeneration": specGen,
@@ -112,7 +114,7 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
 
     // If a job with the same generation-aware name exists, skip creating
     if _, err := c.Client.BatchV1().Jobs(namespace).Get(ctx, job.Name, metav1.GetOptions{}); err == nil {
-        log.Printf("job already exists: %s/%s", namespace, job.Name)
+        // Job already exists - this is expected behavior, no need to log
         return nil
     }
     if _, err := c.Client.BatchV1().Jobs(namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
@@ -150,14 +152,14 @@ func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
     if err != nil { return err }
     for i := range list.Items {
         name := list.Items[i].GetName()
-        log.Printf("processAll reconcile: %s/%s", namespace, name)
+        // Debug: processAll reconcile removed for cleaner output
         if err := c.Reconcile(ctx, namespace, name); err != nil {
             return err
         }
         
         // Also update interface states to keep CR status current
         if err := c.updateInterfaceStates(ctx, namespace, name); err != nil {
-            log.Printf("processAll: failed to update interface states for %s/%s: %v", namespace, name, err)
+            // Debug: log.Printf("processAll: failed to update interface states for %s/%s: %v", namespace, name, err)
             // Don't return error for interface state updates, just log
         }
     }
@@ -236,7 +238,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 }
                 if !handledPartial {
                     // 완전 성공 케이스
-                    interfaceStatuses := c.buildInterfaceStatuses(u, "Configured", "JobSucceeded")
+                    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
                     _ = c.updateCRStatus(ctx, u, map[string]any{
                         "state": "Configured",
                         "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
@@ -320,7 +322,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 }
                 // Fallback: if we couldn't compute per-interface, mark all as Failed
                 if len(statuses) == 0 {
-                    statuses = c.buildInterfaceStatuses(u, "Failed", reason)
+                    statuses = c.buildInterfaceStatuses(u, nodeName, "Failed", reason)
                 }
                 statusPatch := map[string]any{
                     "state": "Failed",
@@ -592,7 +594,7 @@ func getIntFromMap(m map[string]interface{}, key string) int {
 
 // buildInterfaceStatuses creates detailed status information for each interface in the CR
 // Returns a map where keys are interface names (multinic0, multinic1, etc.)
-func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status, reason string) map[string]any {
+func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeName, status, reason string) map[string]any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
         log.Printf("No interfaces found when building status for CR %s/%s", u.GetNamespace(), u.GetName())
@@ -633,8 +635,13 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         // Use interface name as key in the map
         interfaceStatuses[interfaceName] = interfaceStatus
         
-        log.Printf("Interface[%d] status: ID=%d, MAC=%s, IP=%s, Status=%s, Reason=%s", 
-            i, id, macAddress, ipAddress, status, reason)
+        // Log only final state changes to reduce noise
+        if status == "Configured" && reason == "JobSucceeded" {
+            log.Printf("[%s] Interface %s: Configured ✓", nodeName, interfaceName)
+        } else if status == "Failed" {
+            log.Printf("[%s] Interface %s: Failed ✗", nodeName, interfaceName)
+        }
+        // Skip InProgress logging to avoid repetition
     }
     
     return interfaceStatuses
@@ -659,19 +666,19 @@ func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
 // updateInterfaceStates periodically updates the interface states in the CR status 
 // by checking the actual node interface states via API or node status
 func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeName string) error {
-    log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
+    // Debug: log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
     
     // Get the CR for this node
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil {
-        log.Printf("updateInterfaceStates: failed to get CR for node %s: %v", nodeName, err)
+        // Debug: log.Printf("updateInterfaceStates: failed to get CR for node %s: %v", nodeName, err)
         return err
     }
     
     // Get node information to check actual interface states
     node, err := c.Client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil {
-        log.Printf("updateInterfaceStates: failed to get node %s: %v", nodeName, err)
+        // Debug: log.Printf("updateInterfaceStates: failed to get node %s: %v", nodeName, err)
         return err
     }
     
@@ -690,8 +697,8 @@ func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeN
         "nodeReady": c.isNodeReady(node),
     })
     
-    log.Printf("updateInterfaceStates: updated interface states for node %s with %d interfaces", 
-        nodeName, len(interfaceStatuses))
+    // Debug: log.Printf("updateInterfaceStates: updated interface states for node %s with %d interfaces", 
+    //     nodeName, len(interfaceStatuses))
     
     return nil
 }
@@ -759,11 +766,15 @@ func (c *Controller) getActualInterfaceState(node *corev1.Node, macAddress, inte
     
     // For now, we'll return a placeholder based on node readiness
     // This should be enhanced to actually check interface state
+    // Parameters macAddress and interfaceName would be used for detailed interface verification
     
     // Check node addresses to see if we can infer interface state
     for _, addr := range node.Status.Addresses {
         if addr.Type == corev1.NodeInternalIP {
             // If node has internal IP, assume basic networking is working
+            // Future: use macAddress and interfaceName for specific interface checks
+            _ = macAddress    // suppress unused warning - would be used for MAC verification
+            _ = interfaceName // suppress unused warning - would be used for interface name checks
             return "Configured"
         }
     }

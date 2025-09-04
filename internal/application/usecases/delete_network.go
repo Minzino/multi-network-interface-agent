@@ -16,6 +16,9 @@ import (
 // DeleteNetworkInput은 네트워크 삭제 유스케이스의 입력 데이터입니다
 type DeleteNetworkInput struct {
 	NodeName string
+	// FullCleanup이 true이면, 고아 판정 없이 multinic 관련 파일 전체를 정리합니다.
+	// (예: Job 시작 시 깨끗한 상태를 보장하기 위해 사용)
+	FullCleanup bool
 }
 
 // DeleteNetworkOutput은 네트워크 삭제 유스케이스의 출력 데이터입니다
@@ -61,8 +64,8 @@ func (uc *DeleteNetworkUseCase) Execute(ctx context.Context, input DeleteNetwork
 		return nil, fmt.Errorf("failed to detect OS: %w", err)
 	}
 
-	// AGENT_ACTION=cleanup인 경우 모든 multinic 파일을 정리 (CR 삭제 후 실행되므로 DB 조회 불가)
-	if os.Getenv("AGENT_ACTION") == "cleanup" {
+	// 전체 정리 모드: 입력 플래그 또는 환경변수(AGENT_ACTION=cleanup)로 트리거
+	if input.FullCleanup || os.Getenv("AGENT_ACTION") == "cleanup" {
 		uc.logger.Info("Cleanup mode: removing all multinic interface files")
 		switch osType {
 		case interfaces.OSTypeUbuntu:
@@ -463,6 +466,9 @@ func (uc *DeleteNetworkUseCase) executeFullNetplanCleanup(ctx context.Context, i
 
 	if len(multinicFiles) == 0 {
 		uc.logger.Info("No multinic netplan files found - cleanup complete")
+		// 추가: 시스템에 남아있는 multinicX 인터페이스 이름 정리 (DOWN 상태만 대상)
+		uc.cleanupMultinicInterfaceNames(ctx)
+
 		return output, nil
 	}
 
@@ -486,7 +492,7 @@ func (uc *DeleteNetworkUseCase) executeFullNetplanCleanup(ctx context.Context, i
 			metrics.OrphanedInterfacesDeleted.Inc()
 		}
 	}
-	
+
 	return output, nil
 }
 
@@ -516,6 +522,8 @@ func (uc *DeleteNetworkUseCase) executeFullIfcfgCleanup(ctx context.Context, inp
 
 	if len(multinicFiles) == 0 {
 		uc.logger.Info("No multinic ifcfg files found - cleanup complete")
+		// 추가: 시스템에 남아있는 multinicX 인터페이스 이름 정리 (DOWN 상태만 대상)
+		uc.cleanupMultinicInterfaceNames(ctx)
 		return output, nil
 	}
 
@@ -544,6 +552,48 @@ func (uc *DeleteNetworkUseCase) executeFullIfcfgCleanup(ctx context.Context, inp
 			metrics.OrphanedInterfacesDeleted.Inc()
 		}
 	}
-	
+
 	return output, nil
+}
+
+// cleanupMultinicInterfaceNames는 남아있는 multinicX 인터페이스를 안전하게 이름 해제합니다.
+// - 대상: 이름 패턴이 multinic0~9 이고, 인터페이스가 DOWN 상태인 경우만
+// - 방법: altname(ens*/enp*)가 있으면 altname으로 rename 시도, 없으면 건너뜀
+func (uc *DeleteNetworkUseCase) cleanupMultinicInterfaceNames(ctx context.Context) {
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("multinic%d", i)
+		if !uc.namingService.InterfaceExists(name) {
+			continue
+		}
+		if up, err := uc.namingService.IsInterfaceUp(name); err != nil {
+			uc.logger.WithFields(logrus.Fields{"interface_name": name, "error": err}).Debug("Failed to check interface UP status; skip renaming for safety")
+			continue
+		} else if up {
+			uc.logger.WithField("interface_name", name).Warn("Skip renaming UP interface (keep current name)")
+			continue
+		}
+		alts, err := uc.namingService.GetAltNames(name)
+		if err != nil {
+			uc.logger.WithFields(logrus.Fields{"interface_name": name, "error": err}).Debug("Failed to get alt names for interface")
+			continue
+		}
+		// altname 중 사용 중이지 않은 첫 번째 후보 선택
+		var target string
+		for _, alt := range alts {
+			if !uc.namingService.InterfaceExists(alt) {
+				target = alt
+				break
+			}
+		}
+		if target == "" {
+			// 사용 가능한 altname이 없다면 건너뜀 (임의 이름은 위험)
+			uc.logger.WithField("interface_name", name).Debug("No available altname to rename; skipping")
+			continue
+		}
+		if err := uc.namingService.RenameInterface(name, target); err != nil {
+			uc.logger.WithFields(logrus.Fields{"from": name, "to": target, "error": err}).Warn("Failed to rename interface")
+		} else {
+			uc.logger.WithFields(logrus.Fields{"from": name, "to": target}).Info("Renamed leftover multinic interface to altname")
+		}
+	}
 }

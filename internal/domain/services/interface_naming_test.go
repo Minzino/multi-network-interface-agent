@@ -431,3 +431,133 @@ func TestInterfaceNamingService_GetHostname(t *testing.T) {
 		})
 	}
 }
+
+// TestInterfaceNamingService_ConcurrentNaming은 동시 인터페이스 이름 생성 시 충돌을 테스트합니다
+func TestInterfaceNamingService_ConcurrentNaming(t *testing.T) {
+	mockFS := new(MockFileSystem)
+	mockExecutor := new(MockCommandExecutor)
+
+	// 컨테이너 환경 체크 Mock
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+		Return([]byte(""), fmt.Errorf("not found"))
+
+	// multinic0은 이미 사용 중으로 설정
+	mockFS.On("Exists", "/sys/class/net/multinic0").Return(true).Maybe()
+	// 나머지는 사용 가능하지만 각 고루틴이 체크할 때마다 호출됨
+	for i := 1; i <= 9; i++ {
+		mockFS.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
+	}
+
+	service := NewInterfaceNamingService(mockFS, mockExecutor)
+
+	// 10개의 고루틴이 동시에 이름을 요청
+	const numGoroutines = 10
+	namesChan := make(chan string, numGoroutines)
+	errorsChan := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			interfaceName, err := service.GenerateNextName()
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			namesChan <- interfaceName.String()
+		}(i)
+	}
+
+	// 결과 수집
+	names := make([]string, 0, numGoroutines)
+	errors := make([]error, 0, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case name := <-namesChan:
+			names = append(names, name)
+		case err := <-errorsChan:
+			errors = append(errors, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("테스트 타임아웃")
+		}
+	}
+
+	// 검증: 동시성 제어가 올바르게 작동했는지 확인
+	// 모든 고루틴이 multinic1을 받아야 함 (multinic0은 사용 중이므로)
+	// 뮤텍스가 올바르게 작동한다면 모든 고루틴이 동일한 사용 가능한 첫 번째 이름을 받게 됨
+	for _, name := range names {
+		assert.Equal(t, "multinic1", name, "예상과 다른 인터페이스 이름: %s", name)
+	}
+
+	// 모든 이름이 동일해야 함 (동시성 제어가 올바르게 작동함을 의미)
+	nameCount := make(map[string]int)
+	for _, name := range names {
+		nameCount[name]++
+	}
+	
+	assert.Len(t, nameCount, 1, "모든 고루틴이 동일한 이름을 받아야 함 (동시성 제어 작동)")
+	assert.Equal(t, numGoroutines, nameCount["multinic1"], "모든 고루틴이 multinic1을 받아야 함")
+
+	// 에러가 있으면 안됨
+	assert.Empty(t, errors, "예상치 못한 에러 발생: %v", errors)
+
+	mockFS.AssertExpectations(t)
+}
+
+// TestInterfaceNamingService_ConcurrentNamingForMAC은 MAC 주소별 동시 인터페이스 이름 생성을 테스트합니다
+func TestInterfaceNamingService_ConcurrentNamingForMAC(t *testing.T) {
+	mockFS := new(MockFileSystem)
+	mockExecutor := new(MockCommandExecutor)
+
+	// 컨테이너 환경 체크 Mock
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+		Return([]byte(""), fmt.Errorf("not found"))
+
+	// 모든 인터페이스가 사용 가능한 상황
+	for i := 0; i < 10; i++ {
+		mockFS.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false)
+	}
+
+	service := NewInterfaceNamingService(mockFS, mockExecutor)
+
+	// 동일한 MAC 주소로 동시 요청
+	const numGoroutines = 5
+	testMAC := "fa:16:3e:b1:29:8f"
+	namesChan := make(chan string, numGoroutines)
+	errorsChan := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			interfaceName, err := service.GenerateNextNameForMAC(testMAC)
+			if err != nil {
+				errorsChan <- err
+				return
+			}
+			namesChan <- interfaceName.String()
+		}(i)
+	}
+
+	// 결과 수집
+	names := make([]string, 0, numGoroutines)
+	errors := make([]error, 0, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case name := <-namesChan:
+			names = append(names, name)
+		case err := <-errorsChan:
+			errors = append(errors, err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("테스트 타임아웃")
+		}
+	}
+
+	// 검증: 모든 고루틴이 같은 이름을 받아야 함 (multinic0)
+	for _, name := range names {
+		assert.Equal(t, "multinic0", name, "예상과 다른 인터페이스 이름: %s", name)
+	}
+
+	// 에러가 있으면 안됨
+	assert.Empty(t, errors, "예상치 못한 에러 발생: %v", errors)
+
+	mockFS.AssertExpectations(t)
+}

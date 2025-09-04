@@ -25,7 +25,7 @@ func TestService_RunOnce_CreatesJobAndUpdatesStatus(t *testing.T) {
 
     // First run creates job and marks InProgress
     if err := s.RunOnce(context.Background()); err != nil { t.Fatalf("runonce error: %v", err) }
-    if _, err := kclient.BatchV1().Jobs(ns).Get(context.Background(), "multinic-agent-worker-node-01", metav1.GetOptions{}); err != nil {
+    if _, err := kclient.BatchV1().Jobs(ns).Get(context.Background(), "multinic-agent-worker-node-01-g0", metav1.GetOptions{}); err != nil {
         t.Fatalf("expected job created: %v", err)
     }
     got, err := dyn.Resource(nodeCRGVR).Namespace(ns).Get(context.Background(), "worker-node-01", metav1.GetOptions{})
