@@ -56,8 +56,8 @@ func (c *Controller) Reconcile(ctx context.Context, namespace, name string) erro
         return nil
     }
     
-    // Log interface details only when actually processing new changes
-    if specChanged || currentState == "Pending" || currentState == "" {
+    // Log interface details only when first processing (not on subsequent updates)
+    if currentState == "" && observedGen == 0 {
         c.logInterfaceDetails(u, nodeName)
     }
     
@@ -635,14 +635,13 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, status
         // Use interface name as key in the map
         interfaceStatuses[interfaceName] = interfaceStatus
         
-        // Log only meaningful status changes, not every build
-        if status == "InProgress" && reason == "SpecChanged" {
-            log.Printf("Interface %s: %s → InProgress (spec changed)", interfaceName, "Pending")
-        } else if status == "Configured" && reason == "JobSucceeded" {
-            log.Printf("Interface %s: InProgress → Configured ✓", interfaceName)
+        // Log only final state changes to reduce noise
+        if status == "Configured" && reason == "JobSucceeded" {
+            log.Printf("Interface %s: Configured ✓", interfaceName)
         } else if status == "Failed" {
-            log.Printf("Interface %s: InProgress → Failed ✗", interfaceName)
+            log.Printf("Interface %s: Failed ✗", interfaceName)
         }
+        // Skip InProgress logging to avoid repetition
     }
     
     return interfaceStatuses
