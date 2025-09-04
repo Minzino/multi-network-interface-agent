@@ -7,6 +7,7 @@ import (
     "multinic-agent/internal/domain/interfaces"
     "regexp"
     "strings"
+    "sync"
     "time"
 )
 
@@ -15,6 +16,7 @@ type InterfaceNamingService struct {
 	fileSystem      interfaces.FileSystem
 	commandExecutor interfaces.CommandExecutor
 	isContainer     bool // indicates if running in container
+	namingMutex     sync.Mutex // 인터페이스 이름 생성 동시성 제어
 }
 
 // NewInterfaceNamingService는 새로운 InterfaceNamingService를 생성합니다
@@ -34,6 +36,9 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 
 // GenerateNextName은 사용 가능한 다음 인터페이스 이름을 생성합니다
 func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
+	s.namingMutex.Lock()
+	defer s.namingMutex.Unlock()
+	
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
 
@@ -52,6 +57,9 @@ func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, err
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
 func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (entities.InterfaceName, error) {
+	s.namingMutex.Lock()
+	defer s.namingMutex.Unlock()
+	
 	// 먼저 해당 MAC 주소로 이미 설정된 인터페이스가 있는지 확인
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
@@ -67,8 +75,25 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 		}
 	}
 
-	// 기존에 할당된 이름이 없으면 새로운 이름 생성
-	return s.GenerateNextName()
+	// 기존에 할당된 이름이 없으면 새로운 이름 생성 (이미 락이 걸린 상태이므로 내부 함수 호출)
+	return s.generateNextNameInternal()
+}
+
+// generateNextNameInternal은 락이 이미 걸린 상태에서 호출되는 내부 함수입니다
+func (s *InterfaceNamingService) generateNextNameInternal() (entities.InterfaceName, error) {
+	for i := 0; i < 10; i++ {
+		name := fmt.Sprintf("multinic%d", i)
+
+		// 실제 인터페이스로 존재하는지 확인
+		if s.isInterfaceInUse(name) {
+			continue
+		}
+
+		// 사용 가능한 이름 발견
+		return entities.NewInterfaceName(name)
+	}
+
+	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
 
 // isInterfaceInUse는 인터페이스가 이미 사용 중인지 확인합니다
