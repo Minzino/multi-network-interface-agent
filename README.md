@@ -24,59 +24,59 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 ```mermaid
 graph TB
     External[External System<br/>📋 OpenStack 모니터링]
-    
-    subgraph "Kubernetes Cluster"        
-        subgraph "CR 처리"
-            MultiNICController[MultiNIC Controller<br/>👁️ CR Watch]
-            NodeCR[MultiNicNodeConfig CR<br/>📋 노드별 Interface 데이터:<br/>- Worker01: 2 interfaces<br/>- Worker02: 1 interface<br/>- Worker03: 3 interfaces]
-        end
-        
-        subgraph "Job 실행"
-            Job1[Agent Job<br/>Worker01 처리]
-            Job2[Agent Job<br/>Worker02 처리] 
-            Job3[Agent Job<br/>Worker03 처리]
-        end
-        
-        subgraph "Worker Nodes"
-            Node1[Worker01<br/>SystemUUID: b4975c5f-50bb]
-            Node2[Worker02<br/>SystemUUID: d4defd76-faa9]
-            Node3[Worker03<br/>SystemUUID: a1b2c3d4-e5f6]
-        end
-    end
-    
-    subgraph "Network Interfaces"
-        NIC1[Worker01: multinic0, multinic1]
-        NIC2[Worker02: multinic0]
-        NIC3[Worker03: multinic0, multinic1, multinic2]
-    end
-    
-    %% 데이터 흐름
-    External -->|① CR 생성<br/>노드별 설정| NodeCR
-    NodeCR -.->|② Watch Event<br/>실시간 감지| MultiNICController
-    MultiNICController -->|③ Node별 Job 스케줄링| Job1
-    MultiNICController -->|③ Node별 Job 스케줄링| Job2
-    MultiNICController -->|③ Node별 Job 스케줄링| Job3
-    Job1 -->|④ 네트워크 구성| Node1
-    Job2 -->|④ 네트워크 구성| Node2
-    Job3 -->|④ 네트워크 구성| Node3
-    Node1 -->|⑤ 인터페이스 생성| NIC1
-    Node2 -->|⑤ 인터페이스 생성| NIC2
-    Node3 -->|⑤ 인터페이스 생성| NIC3
-    
-    %% 스타일링
-    classDef external fill:#e8f5e8
-    classDef controller fill:#f3e5f5
-    classDef cr fill:#fff3e0
-    classDef job fill:#ffecb3
-    classDef node fill:#fafafa
-    classDef nic fill:#ffcdd2
-    
-    class External external
-    class MultiNICController controller
-    class NodeCR cr
-    class Job1,Job2,Job3 job
-    class Node1,Node2,Node3 node
-    class NIC1,NIC2,NIC3 nic
+
+subgraph "Kubernetes Cluster"
+subgraph "CR 처리"
+MultiNICController[MultiNIC Controller<br/>👁️ CR Watch]
+NodeCR[MultiNicNodeConfig CR<br/>📋 노드별 Interface 데이터:<br/>- Worker01: 2 interfaces<br/>- Worker02: 1 interface<br/>- Worker03: 3 interfaces]
+end
+
+subgraph "Job 실행"
+Job1[Agent Job<br/>Worker01 처리]
+Job2[Agent Job<br/>Worker02 처리]
+Job3[Agent Job<br/>Worker03 처리]
+end
+
+subgraph "Worker Nodes"
+Node1[Worker01<br/>SystemUUID: b4975c5f-50bb]
+Node2[Worker02<br/>SystemUUID: d4defd76-faa9]
+Node3[Worker03<br/>SystemUUID: a1b2c3d4-e5f6]
+end
+end
+
+subgraph "Network Interfaces"
+NIC1[Worker01: multinic0, multinic1]
+NIC2[Worker02: multinic0]
+NIC3[Worker03: multinic0, multinic1, multinic2]
+end
+
+%% 데이터 흐름
+External -->|① CR 생성<br/>노드별 설정| NodeCR
+NodeCR -.->|② Watch Event<br/>실시간 감지| MultiNICController
+MultiNICController -->|③ Node별 Job 스케줄링| Job1
+MultiNICController -->|③ Node별 Job 스케줄링| Job2
+MultiNICController -->|③ Node별 Job 스케줄링| Job3
+Job1 -->|④ 네트워크 구성| Node1
+Job2 -->|④ 네트워크 구성| Node2
+Job3 -->|④ 네트워크 구성| Node3
+Node1 -->|⑤ 인터페이스 생성| NIC1
+Node2 -->|⑤ 인터페이스 생성| NIC2
+Node3 -->|⑤ 인터페이스 생성| NIC3
+
+%% 스타일링
+classDef external fill:#e8f5e8
+classDef controller fill:#f3e5f5
+classDef cr fill:#fff3e0
+classDef job fill:#ffecb3
+classDef node fill:#fafafa
+classDef nic fill:#ffcdd2
+
+class External external
+class MultiNICController controller
+class NodeCR cr
+class Job1,Job2,Job3 job
+class Node1,Node2,Node3 node
+class NIC1,NIC2,NIC3 nic
 ```
 
 ### 처리 워크플로우
@@ -91,25 +91,51 @@ sequenceDiagram
 
     Note over External: 1️⃣ CR 생성
     External->>K8s: MultiNicNodeConfig CR 생성
-    
+
     Note over Controller: 2️⃣ 실시간 감지
     K8s-->>Controller: Watch Event<br/>(CR 변경 감지)
     Controller->>Controller: Instance ID → SystemUUID 매핑
-    
+
     Note over Job: 3️⃣ Job 스케줄링
     Controller->>K8s: Node SystemUUID 조회
     Controller->>K8s: Agent Job 생성<br/>(nodeSelector 적용)
-    
+
     Note over Node: 4️⃣ 네트워크 구성
     K8s->>Job: Job 실행 (타겟 노드)
     Job->>Node: 고아 인터페이스 정리
     Job->>Node: 새로운 네트워크 설정<br/>(Netplan/ifcfg)
     Job->>Node: 드리프트 감지 및 동기화
-    
+
     Note over Controller: 5️⃣ 상태 업데이트
     Job-->>Controller: 실행 결과 수집
     Controller->>K8s: CR 상태 업데이트<br/>(Configured/Failed)
     Controller->>K8s: Job 정리 (TTL)
+```
+
+## ⚙️ Agent Job 동작(중요 변경)
+
+- 시작 시 정리 수행(RUN_MODE=job):
+    - Ubuntu: `/etc/netplan/9*-multinic*.yaml`만 삭제 후 `netplan apply` 실행
+    - RHEL: `/etc/sysconfig/network-scripts/ifcfg-multinic*`만 삭제
+    - 시스템 기본 파일(`50-cloud-init.yaml` 등)은 건드리지 않음
+    - 남아있는 `multinic0~9` 인터페이스는 DOWN 상태일 때만 altname(ens*/enp*)으로 rename 시도(없으면 스킵)
+- 이름 충돌 방지(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
+- 검증 방식 전환(이름→MAC):
+    - 적용 후 검증은 `ip -o link show` 전체에서 CR의 MAC 존재 여부로 판단(특정 이름에 의존하지 않음)
+- 처리 순서: “정리 → 설정(적용) → 검증”으로 실행
+- 종료 지연: `JOB_EXIT_DELAY_SECONDS`(기본 5초) 동안 종료 지연해 로그/요약 수집 용이
+
+권장 값(초기 구동 안정화):
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  -n multinic-system \
+  --set agent.maxConcurrentTasks=1   # 초기엔 1로 권장(이름 경합 최소화)
+```
+
+수동 전체 정리(옵션):
+```bash
+# 컨트롤러가 생성하는 Job에 환경변수로 전달되면 모든 multinic 파일만 정리
+AGENT_ACTION=cleanup
 ```
 
 ## 📦 패키지 구조
@@ -282,6 +308,7 @@ kubectl get crd multinicnodeconfigs.multinic.io
 # Controller Deployment + RBAC + ServiceAccount 생성
 helm install multinic-agent ./deployments/helm \
   --namespace multinic-system \
+  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.0 \
   --set controller.replicas=1 \
   --wait --timeout=300s
@@ -300,6 +327,7 @@ kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-con
 # 차트 업그레이드
 helm upgrade multinic-agent ./deployments/helm \
   --namespace multinic-system \
+  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.1 \
   --wait --timeout=300s
 ```
