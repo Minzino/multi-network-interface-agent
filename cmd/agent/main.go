@@ -226,8 +226,7 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// 설정 조회 (RUN_MODE 체크 위해)
-	cfg := a.container.GetConfig()
+    // 설정 조회가 필요하면 사용 (현재 FullCleanup은 일반 적용 Job에서 사용하지 않음)
 
 	// 1. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 선정리)
 	//    - 이전 테스트에서 남은 multinic* netplan/ifcfg 파일을 먼저 정리하여
