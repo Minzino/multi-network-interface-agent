@@ -137,29 +137,25 @@ func (a *Application) Run() error {
 	}
 
 	// RUN_MODE=job: 한 번 처리 후 종료
-	if cfg.Agent.RunMode == "job" {
-		a.logger.Info("MultiNIC agent started (run mode: job)")
-		// optional cleanup action
-		action := os.Getenv("AGENT_ACTION")
-		if strings.EqualFold(action, "cleanup") {
-			// 실행: 삭제 유스케이스만 수행
-			deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
-			if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
-				a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
-				a.delayJobExitIfNeeded()
-				return err
-			}
-			a.delayJobExitIfNeeded()
-			return nil
-		}
-		if err := a.processNetworkConfigurations(ctx); err != nil {
-			a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
-			a.delayJobExitIfNeeded()
-			return err
-		}
-		a.delayJobExitIfNeeded()
-		return nil
-	}
+    if cfg.Agent.RunMode == "job" {
+        a.logger.Info("MultiNIC agent started (run mode: job)")
+        // optional cleanup action
+        action := os.Getenv("AGENT_ACTION")
+        if strings.EqualFold(action, "cleanup") {
+            // 실행: 삭제 유스케이스만 수행
+            deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
+            if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
+                a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
+                return err
+            }
+            return nil
+        }
+        if err := a.processNetworkConfigurations(ctx); err != nil {
+            a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
+            return err
+        }
+        return nil
+    }
 
 	// 서비스 모드: 폴링 컨트롤러 시작
 	pollingController := polling.NewPollingController(strategy, a.logger)
@@ -203,19 +199,7 @@ func (a *Application) startHealthServer(port string) error {
 }
 
 // delayJobExitIfNeeded는 Job 모드에서 종료 전 대기 시간을 적용합니다.
-func (a *Application) delayJobExitIfNeeded() {
-	// JOB_EXIT_DELAY_SECONDS 환경변수 (기본 5초)
-	delayStr := os.Getenv("JOB_EXIT_DELAY_SECONDS")
-	if strings.TrimSpace(delayStr) == "" {
-		delayStr = "5"
-	}
-	d, err := time.ParseDuration(delayStr + "s")
-	if err != nil || d <= 0 {
-		return
-	}
-	a.logger.WithField("delay", d.String()).Info("Delaying job exit for inspection")
-	time.Sleep(d)
-}
+// delayJobExitIfNeeded was removed per operations policy (no exit delay)
 
 // processNetworkConfigurations는 네트워크 설정을 처리합니다
 func (a *Application) processNetworkConfigurations(ctx context.Context) error {
