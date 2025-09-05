@@ -18,6 +18,10 @@ spec:
         app.kubernetes.io/name: {{ include "multinic-agent.name" . }}
         app.kubernetes.io/component: controller
         {{- include "multinic-agent.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.controller.metricsPort | default "9090" }}"
+        prometheus.io/path: "/metrics"
     spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ include "multinic-agent.serviceAccountName" . }}
@@ -44,6 +48,12 @@ spec:
           value: "{{ .Values.controller.jobTTLSeconds }}"
         - name: CONTROLLER_JOB_DELETE_DELAY
           value: "{{ .Values.controller.jobDeleteDelaySeconds | default "0" }}"
+        - name: CONTROLLER_METRICS_PORT
+          value: "{{ .Values.controller.metricsPort | default "9090" }}"
+        ports:
+          - name: metrics
+            containerPort: {{ .Values.controller.metricsPort | default 9090 | int }}
+            protocol: TCP
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
 {{- end }}

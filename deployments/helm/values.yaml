@@ -7,6 +7,8 @@ image:
 agent:
   # nodeCR 사용 시 조회할 네임스페이스
   nodeCRNamespace: "multinic-system"
+  # Prometheus metrics/health 포트
+  metricsPort: "8080"
 
 # 리소스 제한
 resources:
@@ -42,5 +44,7 @@ controller:
   jobTTLSeconds: "600"
   # Job 삭제 지연(초): 종료 요약/로그 수집용으로 잠시 보존
   jobDeleteDelaySeconds: "30"
+  # Prometheus metrics 포트
+  metricsPort: "9090"
   # Job 삭제 지연(초). 컨트롤러가 종료 메시지(실패 상세) 수집할 시간을 확보
   jobDeleteDelaySeconds: "30"
