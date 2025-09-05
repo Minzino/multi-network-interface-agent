@@ -232,37 +232,29 @@ func (uc *ConfigureNetworkUseCase) applyConfiguration(ctx context.Context, iface
 
 // validateConfiguration은 네트워크 설정을 검증하고 실패 시 롤백합니다
 func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
-	// 3-1. 시스템 레벨 검증 (존재/UP)
-	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
-		// 검증 실패 시 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
-				err,
-			)
-		}
-		return errors.NewNetworkError("Network configuration validation failed", err)
-	}
-	// 3-2. MAC 존재 검증 (이름 고정이 아니라 시스템 전체에서 MAC으로 확인)
-	foundName, macErr := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress)
-	if macErr != nil || strings.TrimSpace(foundName) == "" {
-		// 시스템 어디에도 해당 MAC이 없으면 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("System MAC presence check failed and rollback also failed: %v", rollbackErr),
-				macErr,
-			)
-		}
-		return errors.NewNetworkError("System MAC presence check failed", macErr)
-	}
+    // 3-1. MAC 기반 검증: 시스템 전체에서 해당 MAC을 가진 인터페이스 탐색
+    foundName, macErr := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress)
+    if macErr != nil || strings.TrimSpace(foundName) == "" {
+        // 시스템 어디에도 해당 MAC이 없으면 롤백
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("System MAC presence check failed and rollback also failed: %v", rollbackErr),
+                macErr,
+            )
+        }
+        return errors.NewNetworkError("System MAC presence check failed", macErr)
+    }
 
-	// (선택) UP 상태 확인: foundName 기준으로 확인
-	if uc.isInterfaceUp(ctx, foundName) {
-		uc.logger.WithFields(logrus.Fields{
-			"interface_name": foundName,
-			"mac_address":    iface.MacAddress,
-		}).Debug("Target interface is UP after apply")
-	}
+    // 3-2. UP 상태 확인: foundName 기준으로 확인
+    if !uc.isInterfaceUp(ctx, foundName) {
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("Interface not UP and rollback also failed"),
+                fmt.Errorf("interface %s not UP", foundName),
+            )
+        }
+        return errors.NewNetworkError("Interface is not UP after apply", fmt.Errorf("interface %s not UP", foundName))
+    }
 
 	// MTU/IPv4는 시스템 환경/외부 요인으로 즉시 반영이 지연될 수 있어, 성공 판정은 MAC/존재/UP 기준으로 제한합니다.
 	return nil

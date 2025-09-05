@@ -232,11 +232,11 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	// 1. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 선정리)
 	//    - 이전 테스트에서 남은 multinic* netplan/ifcfg 파일을 먼저 정리하여
 	//      드리프트 경고 및 이름 충돌 가능성을 낮춥니다.
-	deleteInput := usecases.DeleteNetworkInput{
-		NodeName: hostname,
-		// Job 시작 시에는 과거 테스트 잔재를 전부 정리하여 깨끗한 상태에서 적용
-		FullCleanup: strings.EqualFold(cfg.Agent.RunMode, "job"),
-	}
+    deleteInput := usecases.DeleteNetworkInput{
+        NodeName:    hostname,
+        // 일반 적용 Job에서는 고아만 정리(FullCleanup 금지). 전체 정리는 cleanup Job에서만.
+        FullCleanup: false,
+    }
 
 	deleteOutput, err := a.deleteUseCase.Execute(ctx, deleteInput)
 	if err != nil {

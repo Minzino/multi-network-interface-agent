@@ -68,14 +68,26 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 		"config_path": configPath,
 	}).Info("Netplan configuration file created")
 
-	// Test Netplan (try command)
-	if err := a.testNetplan(ctx); err != nil {
-		// Remove configuration file on failure
-		if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
-			a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
-		}
-		return errors.NewNetworkError("Netplan configuration test failed", err)
-	}
+    // Test Netplan (try). revert 오류 계열이면 apply로 폴백하여 안정성 확보
+    if err := a.testNetplan(ctx); err != nil {
+        errStr := err.Error()
+        if strings.Contains(errStr, "File exists: '/run/systemd/network'") ||
+           strings.Contains(errStr, "reverting config") ||
+           strings.Contains(errStr, "exit status 255") {
+            a.logger.WithError(err).Warn("netplan try failed; attempting fallback to 'netplan apply'")
+            if applyErr := a.applyNetplan(ctx); applyErr != nil {
+                if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
+                    a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config after apply fallback failure")
+                }
+                return errors.NewNetworkError("Netplan apply fallback failed", applyErr)
+            }
+        } else {
+            if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
+                a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
+            }
+            return errors.NewNetworkError("Netplan configuration test failed", err)
+        }
+    }
 
 	// Apply Netplan
 	if err := a.applyNetplan(ctx); err != nil {
@@ -155,12 +167,11 @@ func (a *NetplanAdapter) applyNetplan(ctx context.Context) error {
 
 // generateNetplanConfig generates Netplan configuration
 func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string) map[string]interface{} {
-	ethernetConfig := map[string]interface{}{
-		"match": map[string]interface{}{
-			"macaddress": iface.MacAddress,
-		},
-		"set-name": interfaceName,
-	}
+    ethernetConfig := map[string]interface{}{
+        "match": map[string]interface{}{
+            "macaddress": iface.MacAddress,
+        },
+    }
 
 	// Static IP configuration: Both Address and CIDR must be present
 	if iface.Address != "" && iface.CIDR != "" {
