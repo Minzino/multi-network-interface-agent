@@ -50,8 +50,15 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 
 	// Backup logic removed - overwrite existing configuration file if it exists
 
-	// Generate Netplan configuration
-	config := a.generateNetplanConfig(iface, name.String())
+    // Decide rename policy: allow set-name only if the MAC-bound interface is not UP (or not present)
+    renameAllowed := true
+    if curName, isUp, found := a.findInterfaceByMAC(ctx, iface.MacAddress); found && isUp {
+        renameAllowed = false
+        a.logger.WithFields(logrus.Fields{"mac": iface.MacAddress, "current_name": curName}).Debug("Interface is UP - skip set-name to avoid rename")
+    }
+
+    // Generate Netplan configuration
+    config := a.generateNetplanConfig(iface, name.String(), renameAllowed)
 	configData, err := yaml.Marshal(config)
 	if err != nil {
 		return errors.NewSystemError("failed to marshal Netplan configuration", err)
@@ -166,11 +173,14 @@ func (a *NetplanAdapter) applyNetplan(ctx context.Context) error {
 }
 
 // generateNetplanConfig generates Netplan configuration
-func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string) map[string]interface{} {
+func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string, setName bool) map[string]interface{} {
     ethernetConfig := map[string]interface{}{
         "match": map[string]interface{}{
             "macaddress": iface.MacAddress,
         },
+    }
+    if setName {
+        ethernetConfig["set-name"] = interfaceName
     }
 
 	// Static IP configuration: Both Address and CIDR must be present
@@ -216,4 +226,22 @@ func extractInterfaceIndex(name string) int {
 		}
 	}
 	return 0
+}
+
+// findInterfaceByMAC returns the interface name, UP state, and whether found, for the given MAC.
+func (a *NetplanAdapter) findInterfaceByMAC(ctx context.Context, mac string) (name string, up bool, found bool) {
+    macLower := strings.ToLower(strings.TrimSpace(mac))
+    out, err := a.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second, "ip", "-o", "link", "show")
+    if err != nil { return "", false, false }
+    for _, line := range strings.Split(string(out), "\n") {
+        if strings.Contains(strings.ToLower(line), macLower) {
+            parts := strings.SplitN(line, ":", 3)
+            if len(parts) >= 2 {
+                n := strings.TrimSpace(parts[1])
+                isUp := strings.Contains(line, "state UP") || (strings.Contains(line, ",UP,") && strings.Contains(line, "LOWER_UP"))
+                return n, isUp, true
+            }
+        }
+    }
+    return "", false, false
 }
