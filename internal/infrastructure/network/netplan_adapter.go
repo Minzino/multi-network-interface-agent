@@ -68,14 +68,29 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 		"config_path": configPath,
 	}).Info("Netplan configuration file created")
 
-	// Test Netplan (try command)
-	if err := a.testNetplan(ctx); err != nil {
-		// Remove configuration file on failure
-		if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
-			a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
-		}
-		return errors.NewNetworkError("Netplan configuration test failed", err)
-	}
+    // Test Netplan (try). 일부 환경에서 revert 경로 오류가 발생할 수 있어 안전한 폴백을 제공
+    if err := a.testNetplan(ctx); err != nil {
+        errStr := err.Error()
+        // 알려진 패턴: revert 중 '/run/systemd/network' File exists, 또는 try exit status 255 등
+        if strings.Contains(errStr, "File exists: '/run/systemd/network'") ||
+           strings.Contains(errStr, "Something really bad happened while reverting config") ||
+           strings.Contains(errStr, "exit status 255") {
+            a.logger.WithError(err).Warn("netplan try failed; attempting safe fallback to 'netplan apply'")
+            if applyErr := a.applyNetplan(ctx); applyErr != nil {
+                // 폴백도 실패하면 롤백 후 에러 반환
+                if rbErr := a.Rollback(ctx, name.String()); rbErr != nil {
+                    a.logger.WithError(rbErr).Error("Rollback failed after apply fallback")
+                }
+                return errors.NewNetworkError("Netplan apply fallback failed", applyErr)
+            }
+        } else {
+            // 다른 유형의 실패는 기존 동작대로 중단
+            if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
+                a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
+            }
+            return errors.NewNetworkError("Netplan configuration test failed", err)
+        }
+    }
 
 	// Apply Netplan
 	if err := a.applyNetplan(ctx); err != nil {

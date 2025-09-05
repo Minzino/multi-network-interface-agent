@@ -203,46 +203,85 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
                     c.logJobSummary(msg)
                     type failure struct { ID int `json:"id"`; MAC, Name, ErrorType, Reason string }
-                    var sum struct { Failures []failure `json:"failures"` }
-                    if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Failures) > 0 {
-                        // 실패 목록 존재 → per-interface 상태 갱신, 전체는 Failed(JobFailedPartial)
-                        statuses := map[string]any{}
-                        // build maps by id/mac
-                        failByID := map[int]failure{}
-                        failByMAC := map[string]failure{}
-                        for _, f := range sum.Failures { failByID[f.ID] = f; if strings.TrimSpace(f.MAC) != "" { failByMAC[strings.ToLower(strings.TrimSpace(f.MAC))] = f } }
-                        ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
-                        if found {
-                            for i := range ifaces {
-                                ifaceMap, _ := ifaces[i].(map[string]any)
-                                name := fmt.Sprintf("multinic%d", i)
-                                id := getIntFromMap(ifaceMap, "id")
-                                mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
-                                if f, ok := failByID[id]; ok && id != 0 {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailedPartial", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
-                                } else if f, ok := failByMAC[mac]; ok && mac != "" {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailedPartial", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
-                                } else {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(id), "macAddress": mac, "status": "Configured", "reason": "JobSucceeded", "lastUpdated": time.Now().Format(time.RFC3339)}
+                    type result struct { ID int `json:"id"`; MAC, Name, Status string }
+                    var sum struct { Failures []failure `json:"failures"`; Results []result `json:"results"` }
+                    if err := json.Unmarshal([]byte(msg), &sum); err == nil {
+                        // If we have any failures, mark partial and build per-interface statuses preferentially by Results
+                        if len(sum.Failures) > 0 || len(sum.Results) > 0 {
+                            statuses := map[string]any{}
+                            // map results by name for quick lookup
+                            resByName := map[string]result{}
+                            for _, r := range sum.Results { resByName[r.Name] = r }
+                            // mark results as Configured (or provided status)
+                            for name, r := range resByName {
+                                statuses[name] = map[string]any{
+                                    "id":           int64(r.ID),
+                                    "macAddress":   strings.ToLower(strings.TrimSpace(r.MAC)),
+                                    "status":       "Configured",
+                                    "reason":       "JobSucceeded",
+                                    "lastUpdated":  time.Now().Format(time.RFC3339),
                                 }
                             }
+                            // mark failures (prefer name when available)
+                            for _, f := range sum.Failures {
+                                key := f.Name
+                                if strings.TrimSpace(key) == "" {
+                                    // fallback: derive by spec index order
+                                    // (use id->index mapping if needed; simple fallback to name by id order)
+                                    // As a simple approach, keep key as empty and skip if we already have a result
+                                    // else assign by MAC
+                                    if r, ok := resByName[f.Name]; ok && r.Name != "" { key = r.Name }
+                                }
+                                if strings.TrimSpace(key) == "" {
+                                    // no reliable name; skip explicit keying to avoid wrong overwrite
+                                    continue
+                                }
+                                statuses[key] = map[string]any{
+                                    "id":           int64(f.ID),
+                                    "macAddress":   strings.ToLower(strings.TrimSpace(f.MAC)),
+                                    "status":       "Failed",
+                                    "reason":       "JobFailedPartial",
+                                    "message":      f.Reason,
+                                    "lastUpdated":  time.Now().Format(time.RFC3339),
+                                }
+                            }
+                            _ = c.updateCRStatus(ctx, u, map[string]any{
+                                "state": "Failed",
+                                "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailedPartial"} },
+                                "interfaceStatuses": statuses,
+                                "lastUpdated": time.Now().Format(time.RFC3339),
+                            })
+                            handledPartial = true
                         }
-                        _ = c.updateCRStatus(ctx, u, map[string]any{
-                            "state": "Failed",
-                            "conditions": []any{ map[string]any{"type": "Ready", "status": "False", "reason": "JobFailedPartial"} },
-                            "interfaceStatuses": statuses,
-                            "lastUpdated": time.Now().Format(time.RFC3339),
-                        })
-                        handledPartial = true
                     }
                 }
                 if !handledPartial {
-                    // 완전 성공 케이스
-                    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
+                    // 완전 성공 케이스: termination results가 있으면 실제 이름으로 반영
+                    statuses := map[string]any{}
+                    usedResults := false
+                    if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
+                        type result struct { ID int `json:"id"`; MAC, Name, Status string }
+                        var sum struct { Results []result `json:"results"` }
+                        if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Results) > 0 {
+                            for _, r := range sum.Results {
+                                statuses[r.Name] = map[string]any{
+                                    "id":           int64(r.ID),
+                                    "macAddress":   strings.ToLower(strings.TrimSpace(r.MAC)),
+                                    "status":       "Configured",
+                                    "reason":       "JobSucceeded",
+                                    "lastUpdated":  time.Now().Format(time.RFC3339),
+                                }
+                            }
+                            usedResults = true
+                        }
+                    }
+                    if !usedResults {
+                        statuses = c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
+                    }
                     _ = c.updateCRStatus(ctx, u, map[string]any{
                         "state": "Configured",
                         "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
-                        "interfaceStatuses": interfaceStatuses,
+                        "interfaceStatuses": statuses,
                         "lastUpdated": time.Now().Format(time.RFC3339),
                     })
                 }

@@ -88,7 +88,7 @@ func NewApplication(container *container.Container, logger *logrus.Logger) *Appl
 
 // Run은 애플리케이션을 실행합니다
 func (a *Application) Run() error {
-	cfg := a.container.GetConfig()
+    cfg := a.container.GetConfig()
 
 	// OS 타입 감지 및 Info 로그 출력
 	osDetector := a.container.GetOSDetector()
@@ -232,11 +232,11 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	// 1. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 선정리)
 	//    - 이전 테스트에서 남은 multinic* netplan/ifcfg 파일을 먼저 정리하여
 	//      드리프트 경고 및 이름 충돌 가능성을 낮춥니다.
-	deleteInput := usecases.DeleteNetworkInput{
-		NodeName: hostname,
-		// Job 시작 시에는 과거 테스트 잔재를 전부 정리하여 깨끗한 상태에서 적용
-		FullCleanup: strings.EqualFold(cfg.Agent.RunMode, "job"),
-	}
+    deleteInput := usecases.DeleteNetworkInput{
+        NodeName:    hostname,
+        // 일반 적용 Job에서는 고아 파일만 정리. 전체 정리는 AGENT_ACTION=cleanup에서만 수행
+        FullCleanup: false,
+    }
 
 	deleteOutput, err := a.deleteUseCase.Execute(ctx, deleteInput)
 	if err != nil {
@@ -311,16 +311,17 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		// 종료 메시지(termination log)에 요약 정보 기록 (Controller가 읽어 로그로 표출 가능)
 		// 포맷: JSON {node, processed, failed, total, failures[], deleted_total, delete_errors, timestamp}
 		// 노드 이름은 위에서 resolveNodeName으로 구함
-		summary := map[string]any{
-			"node":          hostname,
-			"processed":     configOutput.ProcessedCount,
-			"failed":        configOutput.FailedCount,
-			"total":         configOutput.TotalCount,
-			"failures":      configOutput.Failures,
-			"deleted_total": deletedTotal,
-			"delete_errors": deleteErrors,
-			"timestamp":     time.Now().Format(time.RFC3339),
-		}
+        summary := map[string]any{
+            "node":          hostname,
+            "processed":     configOutput.ProcessedCount,
+            "failed":        configOutput.FailedCount,
+            "total":         configOutput.TotalCount,
+            "failures":      configOutput.Failures,
+            "results":       configOutput.Results,
+            "deleted_total": deletedTotal,
+            "delete_errors": deleteErrors,
+            "timestamp":     time.Now().Format(time.RFC3339),
+        }
 		if b, err := json.Marshal(summary); err == nil {
 			// Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
 			_ = os.WriteFile("/dev/termination-log", b, 0644)

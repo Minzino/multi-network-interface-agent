@@ -79,19 +79,28 @@ type ConfigureNetworkInput struct {
 
 // ConfigureNetworkOutput은 유스케이스의 출력 결과입니다
 type ConfigureNetworkOutput struct {
-	ProcessedCount int
-	FailedCount    int
-	TotalCount     int
-	Failures       []InterfaceFailure
+    ProcessedCount int
+    FailedCount    int
+    TotalCount     int
+    Failures       []InterfaceFailure
+    Results        []InterfaceResult
 }
 
 // InterfaceFailure는 실패한 인터페이스에 대한 요약 정보를 담습니다
 type InterfaceFailure struct {
-	ID        int    `json:"id"`
-	MAC       string `json:"mac"`
-	Name      string `json:"name"`
-	ErrorType string `json:"errorType"`
-	Reason    string `json:"reason"`
+    ID        int    `json:"id"`
+    MAC       string `json:"mac"`
+    Name      string `json:"name"`
+    ErrorType string `json:"errorType"`
+    Reason    string `json:"reason"`
+}
+
+// InterfaceResult는 성공/처리된 인터페이스에 대한 요약 정보를 담습니다
+type InterfaceResult struct {
+    ID     int    `json:"id"`
+    MAC    string `json:"mac"`
+    Name   string `json:"name"`
+    Status string `json:"status"` // Configured 등
 }
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
@@ -125,14 +134,16 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		maxWorkers = 1 // 최소 1개는 처리
 	}
 
-	var (
-		processedCount int32
-		failedCount    int32
-		wg             sync.WaitGroup
-		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
-		failuresMu     sync.Mutex
-		failures       []InterfaceFailure
-	)
+    var (
+        processedCount int32
+        failedCount    int32
+        wg             sync.WaitGroup
+        semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+        failuresMu     sync.Mutex
+        failures       []InterfaceFailure
+        resultsMu      sync.Mutex
+        results        []InterfaceResult
+    )
 
 	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
@@ -152,21 +163,22 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
 
-			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu); err != nil {
-				uc.logger.WithError(err).Error("Critical error processing interface")
-			}
-		}(iface)
-	}
+            if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu, &results, &resultsMu); err != nil {
+                uc.logger.WithError(err).Error("Critical error processing interface")
+            }
+        }(iface)
+    }
 
 	// 모든 처리가 완료될 때까지 대기
 	wg.Wait()
 
-	return &ConfigureNetworkOutput{
-		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
-		FailedCount:    int(atomic.LoadInt32(&failedCount)),
-		TotalCount:     len(allInterfaces),
-		Failures:       failures,
-	}, nil
+    return &ConfigureNetworkOutput{
+        ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+        FailedCount:    int(atomic.LoadInt32(&failedCount)),
+        TotalCount:     len(allInterfaces),
+        Failures:       failures,
+        Results:        results,
+    }, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
@@ -613,20 +625,34 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
 func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
-	ctx context.Context,
-	iface entities.NetworkInterface,
-	osType interfaces.OSType,
-	processedCount, failedCount *int32,
-	failures *[]InterfaceFailure,
-	failuresMu *sync.Mutex,
+    ctx context.Context,
+    iface entities.NetworkInterface,
+    osType interfaces.OSType,
+    processedCount, failedCount *int32,
+    failures *[]InterfaceFailure,
+    failuresMu *sync.Mutex,
+    results *[]InterfaceResult,
+    resultsMu *sync.Mutex,
 ) error {
-	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
-	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
-	if err != nil {
-		uc.handleInterfaceError("interface name generation", iface.ID, iface.MacAddress, err)
-		atomic.AddInt32(failedCount, 1)
-		return nil // 다음 인터페이스 처리를 위해 에러 반환하지 않음
-	}
+    // 기존 시스템에 동일 MAC의 인터페이스가 있으면 그 이름을 그대로 사용, 없으면 새 이름 예약
+    var interfaceName entities.InterfaceName
+    if existingName, errFind := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress); errFind == nil && strings.TrimSpace(existingName) != "" {
+        if en, nerr := entities.NewInterfaceName(existingName); nerr == nil {
+            interfaceName = en
+        } else {
+            uc.handleInterfaceError("validate existing interface name", iface.ID, iface.MacAddress, nerr)
+            atomic.AddInt32(failedCount, 1)
+            return nil
+        }
+    } else {
+        en, nerr := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
+        if nerr != nil {
+            uc.handleInterfaceError("interface name generation", iface.ID, iface.MacAddress, nerr)
+            atomic.AddInt32(failedCount, 1)
+            return nil
+        }
+        interfaceName = en
+    }
 
 	// OS별로 처리 필요성 검사
 	shouldProcess, configPath := uc.checkNeedProcessing(ctx, iface, interfaceName, osType)
@@ -641,22 +667,31 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
 			"config_path":    configPath,
 		}).Debug("Processing interface")
 
-		if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
-			uc.handleProcessingError(ctx, iface, interfaceName, err)
-			atomic.AddInt32(failedCount, 1)
-			// 실패 상세 수집
-			failuresMu.Lock()
-			*failures = append(*failures, InterfaceFailure{
-				ID:        iface.ID,
-				MAC:       iface.MacAddress,
-				Name:      interfaceName.String(),
-				ErrorType: uc.getErrorType(err),
-				Reason:    err.Error(),
-			})
-			failuresMu.Unlock()
-		} else {
-			atomic.AddInt32(processedCount, 1)
-		}
+        if err := uc.processInterface(ctx, iface, interfaceName); err != nil {
+            uc.handleProcessingError(ctx, iface, interfaceName, err)
+            atomic.AddInt32(failedCount, 1)
+            // 실패 상세 수집
+            failuresMu.Lock()
+            *failures = append(*failures, InterfaceFailure{
+                ID:        iface.ID,
+                MAC:       iface.MacAddress,
+                Name:      interfaceName.String(),
+                ErrorType: uc.getErrorType(err),
+                Reason:    err.Error(),
+            })
+            failuresMu.Unlock()
+        } else {
+            atomic.AddInt32(processedCount, 1)
+            // 성공 결과 수집
+            resultsMu.Lock()
+            *results = append(*results, InterfaceResult{
+                ID:     iface.ID,
+                MAC:    iface.MacAddress,
+                Name:   interfaceName.String(),
+                Status: "Configured",
+            })
+            resultsMu.Unlock()
+        }
 	}
 
 	return nil
@@ -702,18 +737,52 @@ func (uc *ConfigureNetworkUseCase) checkNetplanNeedProcessing(ctx context.Contex
 	// 파일이 존재하지 않거나, 드리프트가 발생했거나, 아직 설정되지 않은 경우 처리
 	fileExists := uc.fileSystem.Exists(configPath)
 	isDrifted := false
-	if fileExists {
-		isDrifted = uc.isDrifted(ctx, iface, configPath)
-	}
+    if fileExists {
+        isDrifted = uc.isDrifted(ctx, iface, configPath)
+    }
 
-	// 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
-	systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
-	if systemDrift {
-		isDrifted = true
-	}
+    // 실제 시스템 인터페이스 검증을 항상 수행 (파일 존재 여부와 무관)
+    systemDrift := uc.checkSystemInterfaceDrift(ctx, iface, interfaceName.String())
+    if systemDrift {
+        isDrifted = true
+    }
 
 	shouldProcess := !fileExists || isDrifted || iface.Status == entities.StatusPending
 	return shouldProcess, configPath
+}
+
+// removeOtherNetplanFilesForMAC는 동일 MAC을 참조하지만 다른 인터페이스 이름으로 정의된
+// netplan 파일이 있을 경우 제거하여 set-name 충돌을 방지합니다.
+func (uc *ConfigureNetworkUseCase) removeOtherNetplanFilesForMAC(ctx context.Context, macLower string, desiredName string, desiredPath string) {
+    dir := uc.configurer.GetConfigDir()
+    files, err := uc.fileSystem.ListFiles(dir)
+    if err != nil { return }
+    macLower = strings.ToLower(strings.TrimSpace(macLower))
+    for _, fname := range files {
+        if !strings.HasSuffix(fname, ".yaml") { continue }
+        path := filepath.Join(dir, fname)
+        // 건너뛰기: 이번에 작성할 대상 파일
+        if path == desiredPath { continue }
+        content, err := uc.fileSystem.ReadFile(path)
+        if err != nil { continue }
+        var np NetplanYAML
+        if yamlErr := yaml.Unmarshal(content, &np); yamlErr != nil { continue }
+        for name, eth := range np.Network.Ethernets {
+            if strings.ToLower(strings.TrimSpace(eth.Match.MACAddress)) == macLower {
+                if name != desiredName {
+                    // 충돌 파일 삭제
+                    if remErr := uc.fileSystem.Remove(path); remErr == nil {
+                        uc.logger.WithFields(logrus.Fields{
+                            "file":          path,
+                            "mac_address":   macLower,
+                            "old_name":      name,
+                            "desired_name":  desiredName,
+                        }).Info("Removed conflicting netplan file for same MAC")
+                    }
+                }
+            }
+        }
+    }
 }
 
 // extractInterfaceIndex는 인터페이스 이름에서 인덱스를 추출합니다
