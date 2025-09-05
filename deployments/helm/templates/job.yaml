@@ -27,40 +27,27 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         env:
         - name: DATA_SOURCE
-          value: "{{ .Values.agent.dataSource }}"
+          value: "{{ .Values.agent.dataSource | default "nodecr" }}"
         - name: NODE_CR_NAMESPACE
-          value: "{{ .Values.agent.nodeCRNamespace }}"
+          value: "{{ .Values.agent.nodeCRNamespace | default "multinic-system" }}"
         - name: NODE_NAME
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        - name: DB_HOST
-          value: "{{ .Values.database.host }}"
-        - name: DB_PORT
-          value: "{{ .Values.database.port }}"
-        - name: DB_USER
-          value: "{{ .Values.database.user }}"
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "multinic-agent.fullname" . }}-db
-              key: password
-        - name: DB_NAME
-          value: "{{ .Values.database.name }}"
         - name: POLL_INTERVAL
-          value: "{{ .Values.agent.pollInterval }}"
+          value: "{{ .Values.agent.pollInterval | default "30s" }}"
         - name: LOG_LEVEL
-          value: "{{ .Values.agent.logLevel }}"
+          value: "{{ .Values.agent.logLevel | default "info" }}"
         - name: HEALTH_PORT
           value: "8080"
         - name: MAX_CONCURRENT_TASKS
-          value: "{{ .Values.agent.maxConcurrentTasks }}"
+          value: "{{ .Values.agent.maxConcurrentTasks | default 5 }}"
         - name: BACKOFF_ENABLED
-          value: "{{ .Values.agent.backoff.enabled }}"
+          value: "{{ .Values.agent.backoff.enabled | default true }}"
         - name: BACKOFF_MAX_INTERVAL
-          value: "{{ .Values.agent.backoff.maxInterval }}"
+          value: "{{ .Values.agent.backoff.maxInterval | default "300s" }}"
         - name: BACKOFF_MULTIPLIER
-          value: "{{ .Values.agent.backoff.multiplier }}"
+          value: "{{ .Values.agent.backoff.multiplier | default 2.0 }}"
         ports:
         - name: health
           containerPort: 8080

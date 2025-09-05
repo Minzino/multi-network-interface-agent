@@ -3,6 +3,7 @@ package main
 import (
     "context"
     "log"
+    "net/http"
     "os"
     "os/signal"
     "time"
@@ -14,6 +15,8 @@ import (
     "k8s.io/client-go/kubernetes"
     "k8s.io/client-go/rest"
     "k8s.io/client-go/tools/clientcmd"
+
+    "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -47,6 +50,16 @@ func main() {
     if secs, err := time.ParseDuration(jobDelDelay+"s"); err == nil {
         c.JobDeleteDelaySeconds = int(secs / time.Second)
     }
+
+    // start metrics endpoint
+    mport := getenv("CONTROLLER_METRICS_PORT", "9090")
+    go func() {
+        mux := http.NewServeMux()
+        mux.Handle("/metrics", promhttp.Handler())
+        if err := http.ListenAndServe(":"+mport, mux); err != nil {
+            log.Printf("metrics server error: %v", err)
+        }
+    }()
 
     if mode == "watch" {
         w := controller.NewWatcher(c, ns)
