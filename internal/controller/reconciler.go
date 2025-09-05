@@ -237,12 +237,51 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     }
                 }
                 if !handledPartial {
-                    // 완전 성공 케이스
-                    interfaceStatuses := c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
+                    // 완전 성공 케이스: termination results가 있으면 실제 이름으로 반영
+                    statuses := map[string]any{}
+                    usedResults := false
+                    if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
+                        type result struct { ID int `json:"id"`; MAC, Name, Status string }
+                        var sum struct { Results []result `json:"results"` }
+                        if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Results) > 0 {
+                            // spec 참조해 address/cidr/mtu 채우기
+                            ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
+                            for _, r := range sum.Results {
+                                // 기본 필드
+                                st := map[string]any{
+                                    "id":           int64(r.ID),
+                                    "macAddress":   strings.ToLower(strings.TrimSpace(r.MAC)),
+                                    "status":       "Configured",
+                                    "reason":       "JobSucceeded",
+                                    "lastUpdated":  time.Now().Format(time.RFC3339),
+                                }
+                                // spec에서 address/cidr/mtu 채움
+                                if found {
+                                    for i, it := range ifaces {
+                                        m, _ := it.(map[string]any)
+                                        id := getIntFromMap(m, "id")
+                                        mac := strings.ToLower(getStringFromMap(m, "macAddress"))
+                                        if id == r.ID || (mac != "" && mac == strings.ToLower(strings.TrimSpace(r.MAC))) {
+                                            st["interfaceIndex"] = int64(i)
+                                            st["address"] = getStringFromMap(m, "address")
+                                            st["cidr"] = getStringFromMap(m, "cidr")
+                                            st["mtu"] = int64(getIntFromMap(m, "mtu"))
+                                            break
+                                        }
+                                    }
+                                }
+                                statuses[r.Name] = st
+                            }
+                            usedResults = true
+                        }
+                    }
+                    if !usedResults {
+                        statuses = c.buildInterfaceStatuses(u, nodeName, "Configured", "JobSucceeded")
+                    }
                     _ = c.updateCRStatus(ctx, u, map[string]any{
                         "state": "Configured",
                         "conditions": []any{ map[string]any{"type": "Ready", "status": "True", "reason": "JobSucceeded"} },
-                        "interfaceStatuses": interfaceStatuses,
+                        "interfaceStatuses": statuses,
                         "lastUpdated": time.Now().Format(time.RFC3339),
                     })
                 }

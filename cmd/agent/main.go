@@ -310,16 +310,17 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		// 종료 메시지(termination log)에 요약 정보 기록 (Controller가 읽어 로그로 표출 가능)
 		// 포맷: JSON {node, processed, failed, total, failures[], deleted_total, delete_errors, timestamp}
 		// 노드 이름은 위에서 resolveNodeName으로 구함
-		summary := map[string]any{
-			"node":          hostname,
-			"processed":     configOutput.ProcessedCount,
-			"failed":        configOutput.FailedCount,
-			"total":         configOutput.TotalCount,
-			"failures":      configOutput.Failures,
-			"deleted_total": deletedTotal,
-			"delete_errors": deleteErrors,
-			"timestamp":     time.Now().Format(time.RFC3339),
-		}
+        summary := map[string]any{
+            "node":          hostname,
+            "processed":     configOutput.ProcessedCount,
+            "failed":        configOutput.FailedCount,
+            "total":         configOutput.TotalCount,
+            "failures":      configOutput.Failures,
+            "results":       configOutput.Results,
+            "deleted_total": deletedTotal,
+            "delete_errors": deleteErrors,
+            "timestamp":     time.Now().Format(time.RFC3339),
+        }
 		if b, err := json.Marshal(summary); err == nil {
 			// Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
 			_ = os.WriteFile("/dev/termination-log", b, 0644)

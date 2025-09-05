@@ -79,10 +79,11 @@ type ConfigureNetworkInput struct {
 
 // ConfigureNetworkOutput은 유스케이스의 출력 결과입니다
 type ConfigureNetworkOutput struct {
-	ProcessedCount int
-	FailedCount    int
-	TotalCount     int
-	Failures       []InterfaceFailure
+    ProcessedCount int
+    FailedCount    int
+    TotalCount     int
+    Failures       []InterfaceFailure
+    Results        []InterfaceResult
 }
 
 // InterfaceFailure는 실패한 인터페이스에 대한 요약 정보를 담습니다
@@ -92,6 +93,14 @@ type InterfaceFailure struct {
 	Name      string `json:"name"`
 	ErrorType string `json:"errorType"`
 	Reason    string `json:"reason"`
+}
+
+// InterfaceResult는 성공/처리된 인터페이스에 대한 요약 정보를 담습니다
+type InterfaceResult struct {
+    ID     int    `json:"id"`
+    MAC    string `json:"mac"`
+    Name   string `json:"name"`
+    Status string `json:"status"` // e.g., Configured
 }
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
@@ -125,14 +134,16 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		maxWorkers = 1 // 최소 1개는 처리
 	}
 
-	var (
-		processedCount int32
-		failedCount    int32
-		wg             sync.WaitGroup
-		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
-		failuresMu     sync.Mutex
-		failures       []InterfaceFailure
-	)
+    var (
+        processedCount int32
+        failedCount    int32
+        wg             sync.WaitGroup
+        semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+        failuresMu     sync.Mutex
+        failures       []InterfaceFailure
+        resultsMu      sync.Mutex
+        results        []InterfaceResult
+    )
 
 	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
@@ -152,21 +163,22 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
 
-			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu); err != nil {
-				uc.logger.WithError(err).Error("Critical error processing interface")
-			}
-		}(iface)
-	}
+            if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu, &results, &resultsMu); err != nil {
+                uc.logger.WithError(err).Error("Critical error processing interface")
+            }
+        }(iface)
+    }
 
 	// 모든 처리가 완료될 때까지 대기
 	wg.Wait()
 
-	return &ConfigureNetworkOutput{
-		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
-		FailedCount:    int(atomic.LoadInt32(&failedCount)),
-		TotalCount:     len(allInterfaces),
-		Failures:       failures,
-	}, nil
+    return &ConfigureNetworkOutput{
+        ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+        FailedCount:    int(atomic.LoadInt32(&failedCount)),
+        TotalCount:     len(allInterfaces),
+        Failures:       failures,
+        Results:        results,
+    }, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
@@ -605,12 +617,14 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
 func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
-	ctx context.Context,
-	iface entities.NetworkInterface,
-	osType interfaces.OSType,
-	processedCount, failedCount *int32,
-	failures *[]InterfaceFailure,
-	failuresMu *sync.Mutex,
+    ctx context.Context,
+    iface entities.NetworkInterface,
+    osType interfaces.OSType,
+    processedCount, failedCount *int32,
+    failures *[]InterfaceFailure,
+    failuresMu *sync.Mutex,
+    results *[]InterfaceResult,
+    resultsMu *sync.Mutex,
 ) error {
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
@@ -646,9 +660,13 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
 				Reason:    err.Error(),
 			})
 			failuresMu.Unlock()
-		} else {
-			atomic.AddInt32(processedCount, 1)
-		}
+        } else {
+            atomic.AddInt32(processedCount, 1)
+            // 성공 결과 수집 (실제 사용된 이름 기준)
+            resultsMu.Lock()
+            *results = append(*results, InterfaceResult{ID: iface.ID, MAC: iface.MacAddress, Name: interfaceName.String(), Status: "Configured"})
+            resultsMu.Unlock()
+        }
 	}
 
 	return nil
