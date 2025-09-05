@@ -52,7 +52,7 @@ spec:
         - name: LOG_LEVEL
           value: "{{ .Values.agent.logLevel }}"
         - name: HEALTH_PORT
-          value: "8080"
+          value: "{{ .Values.agent.metricsPort | default "8080" }}"
         - name: MAX_CONCURRENT_TASKS
           value: "{{ .Values.agent.maxConcurrentTasks }}"
         - name: BACKOFF_ENABLED
@@ -63,7 +63,7 @@ spec:
           value: "{{ .Values.agent.backoff.multiplier }}"
         ports:
         - name: health
-          containerPort: 8080
+          containerPort: {{ .Values.agent.metricsPort | default 8080 | int }}
           protocol: TCP
         livenessProbe:
           httpGet:

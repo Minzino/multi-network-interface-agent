@@ -46,7 +46,7 @@ git checkout -b feature/node-based-clean-architecture
 ### Agent (Job)
 - 종료 정책 정교화: 부분 실패(일부 성공/일부 실패)는 기본 Completed(성공 종료) 처리, 전체 실패는 Failed
 - 종료 요약(JSON)을 termination log에 기록: processed/failed/total + failures[id,mac,name,reason]
-- 종료 지연 5초(JOB_EXIT_DELAY_SECONDS=5)로 즉시 삭제 완화 → 컨트롤러가 요약 안정 수집
+  
 - MAC 일치 검증 유지(오적용 방지). MTU/IPv4 즉시 검증은 실패 판정에서 제외(적용은 계속 시도)
 - Netplan 파일 권한 0600으로 저장(권한 경고로 인한 try 실패 방지)
 
@@ -72,7 +72,7 @@ git checkout -b feature/node-based-clean-architecture
 ### 다음 과제(선택 사항)
 - 실패 상세를 CR status.failedInterfaces 등으로 구조화하여 운영가시성 향상
 - generation 변경 신호를 주기 위한 spec.revision/annotation 전략 합의
-- 필요 시 JOB_EXIT_DELAY_SECONDS/DELETE_DELAY 파라미터 운영값 튜닝
+  
 
 ### 0단계: Git 워크플로우 준비 ✅
 **목표**: 안전한 개발 환경 구성

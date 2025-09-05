@@ -50,8 +50,15 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 
 	// Backup logic removed - overwrite existing configuration file if it exists
 
-	// Generate Netplan configuration
-	config := a.generateNetplanConfig(iface, name.String())
+    // Decide rename policy: allow set-name only if the MAC-bound interface is not UP (or not present)
+    renameAllowed := true
+    if curName, isUp, found := a.findInterfaceByMAC(ctx, iface.MacAddress); found && isUp {
+        renameAllowed = false
+        a.logger.WithFields(logrus.Fields{"mac": iface.MacAddress, "current_name": curName}).Debug("Interface is UP - skip set-name to avoid rename")
+    }
+
+    // Generate Netplan configuration
+    config := a.generateNetplanConfig(iface, name.String(), renameAllowed)
 	configData, err := yaml.Marshal(config)
 	if err != nil {
 		return errors.NewSystemError("failed to marshal Netplan configuration", err)
@@ -68,14 +75,26 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 		"config_path": configPath,
 	}).Info("Netplan configuration file created")
 
-	// Test Netplan (try command)
-	if err := a.testNetplan(ctx); err != nil {
-		// Remove configuration file on failure
-		if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
-			a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
-		}
-		return errors.NewNetworkError("Netplan configuration test failed", err)
-	}
+    // Test Netplan (try). revert 오류 계열이면 apply로 폴백하여 안정성 확보
+    if err := a.testNetplan(ctx); err != nil {
+        errStr := err.Error()
+        if strings.Contains(errStr, "File exists: '/run/systemd/network'") ||
+           strings.Contains(errStr, "reverting config") ||
+           strings.Contains(errStr, "exit status 255") {
+            a.logger.WithError(err).Warn("netplan try failed; attempting fallback to 'netplan apply'")
+            if applyErr := a.applyNetplan(ctx); applyErr != nil {
+                if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
+                    a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config after apply fallback failure")
+                }
+                return errors.NewNetworkError("Netplan apply fallback failed", applyErr)
+            }
+        } else {
+            if removeErr := a.fileSystem.Remove(configPath); removeErr != nil {
+                a.logger.WithError(removeErr).WithField("config_path", configPath).Error("Failed to remove config file after Netplan test failure")
+            }
+            return errors.NewNetworkError("Netplan configuration test failed", err)
+        }
+    }
 
 	// Apply Netplan
 	if err := a.applyNetplan(ctx); err != nil {
@@ -154,13 +173,15 @@ func (a *NetplanAdapter) applyNetplan(ctx context.Context) error {
 }
 
 // generateNetplanConfig generates Netplan configuration
-func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string) map[string]interface{} {
-	ethernetConfig := map[string]interface{}{
-		"match": map[string]interface{}{
-			"macaddress": iface.MacAddress,
-		},
-		"set-name": interfaceName,
-	}
+func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string, setName bool) map[string]interface{} {
+    ethernetConfig := map[string]interface{}{
+        "match": map[string]interface{}{
+            "macaddress": iface.MacAddress,
+        },
+    }
+    if setName {
+        ethernetConfig["set-name"] = interfaceName
+    }
 
 	// Static IP configuration: Both Address and CIDR must be present
 	if iface.Address != "" && iface.CIDR != "" {
@@ -205,4 +226,22 @@ func extractInterfaceIndex(name string) int {
 		}
 	}
 	return 0
+}
+
+// findInterfaceByMAC returns the interface name, UP state, and whether found, for the given MAC.
+func (a *NetplanAdapter) findInterfaceByMAC(ctx context.Context, mac string) (name string, up bool, found bool) {
+    macLower := strings.ToLower(strings.TrimSpace(mac))
+    out, err := a.commandExecutor.ExecuteWithTimeout(ctx, 5*time.Second, "ip", "-o", "link", "show")
+    if err != nil { return "", false, false }
+    for _, line := range strings.Split(string(out), "\n") {
+        if strings.Contains(strings.ToLower(line), macLower) {
+            parts := strings.SplitN(line, ":", 3)
+            if len(parts) >= 2 {
+                n := strings.TrimSpace(parts[1])
+                isUp := strings.Contains(line, "state UP") || (strings.Contains(line, ",UP,") && strings.Contains(line, "LOWER_UP"))
+                return n, isUp, true
+            }
+        }
+    }
+    return "", false, false
 }

@@ -79,10 +79,11 @@ type ConfigureNetworkInput struct {
 
 // ConfigureNetworkOutput은 유스케이스의 출력 결과입니다
 type ConfigureNetworkOutput struct {
-	ProcessedCount int
-	FailedCount    int
-	TotalCount     int
-	Failures       []InterfaceFailure
+    ProcessedCount int
+    FailedCount    int
+    TotalCount     int
+    Failures       []InterfaceFailure
+    Results        []InterfaceResult
 }
 
 // InterfaceFailure는 실패한 인터페이스에 대한 요약 정보를 담습니다
@@ -92,6 +93,14 @@ type InterfaceFailure struct {
 	Name      string `json:"name"`
 	ErrorType string `json:"errorType"`
 	Reason    string `json:"reason"`
+}
+
+// InterfaceResult는 성공/처리된 인터페이스에 대한 요약 정보를 담습니다
+type InterfaceResult struct {
+    ID     int    `json:"id"`
+    MAC    string `json:"mac"`
+    Name   string `json:"name"`
+    Status string `json:"status"` // e.g., Configured
 }
 
 // Execute는 네트워크 설정 유스케이스를 실행합니다
@@ -125,14 +134,16 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 		maxWorkers = 1 // 최소 1개는 처리
 	}
 
-	var (
-		processedCount int32
-		failedCount    int32
-		wg             sync.WaitGroup
-		semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
-		failuresMu     sync.Mutex
-		failures       []InterfaceFailure
-	)
+    var (
+        processedCount int32
+        failedCount    int32
+        wg             sync.WaitGroup
+        semaphore      = make(chan struct{}, maxWorkers) // 동시 실행 제한
+        failuresMu     sync.Mutex
+        failures       []InterfaceFailure
+        resultsMu      sync.Mutex
+        results        []InterfaceResult
+    )
 
 	// 2. 각 인터페이스를 병렬로 처리
 	for _, iface := range allInterfaces {
@@ -152,21 +163,22 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 				metrics.SetConcurrentTasks(float64(len(semaphore)))
 			}()
 
-			if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu); err != nil {
-				uc.logger.WithError(err).Error("Critical error processing interface")
-			}
-		}(iface)
-	}
+            if err := uc.processInterfaceWithCheck(ctx, iface, osType, &processedCount, &failedCount, &failures, &failuresMu, &results, &resultsMu); err != nil {
+                uc.logger.WithError(err).Error("Critical error processing interface")
+            }
+        }(iface)
+    }
 
 	// 모든 처리가 완료될 때까지 대기
 	wg.Wait()
 
-	return &ConfigureNetworkOutput{
-		ProcessedCount: int(atomic.LoadInt32(&processedCount)),
-		FailedCount:    int(atomic.LoadInt32(&failedCount)),
-		TotalCount:     len(allInterfaces),
-		Failures:       failures,
-	}, nil
+    return &ConfigureNetworkOutput{
+        ProcessedCount: int(atomic.LoadInt32(&processedCount)),
+        FailedCount:    int(atomic.LoadInt32(&failedCount)),
+        TotalCount:     len(allInterfaces),
+        Failures:       failures,
+        Results:        results,
+    }, nil
 }
 
 // processInterface는 개별 인터페이스를 처리합니다
@@ -232,37 +244,29 @@ func (uc *ConfigureNetworkUseCase) applyConfiguration(ctx context.Context, iface
 
 // validateConfiguration은 네트워크 설정을 검증하고 실패 시 롤백합니다
 func (uc *ConfigureNetworkUseCase) validateConfiguration(ctx context.Context, iface entities.NetworkInterface, interfaceName entities.InterfaceName) error {
-	// 3-1. 시스템 레벨 검증 (존재/UP)
-	if err := uc.configurer.Validate(ctx, interfaceName); err != nil {
-		// 검증 실패 시 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("Validation failed and rollback also failed: %v", rollbackErr),
-				err,
-			)
-		}
-		return errors.NewNetworkError("Network configuration validation failed", err)
-	}
-	// 3-2. MAC 존재 검증 (이름 고정이 아니라 시스템 전체에서 MAC으로 확인)
-	foundName, macErr := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress)
-	if macErr != nil || strings.TrimSpace(foundName) == "" {
-		// 시스템 어디에도 해당 MAC이 없으면 롤백
-		if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
-			return errors.NewNetworkError(
-				fmt.Sprintf("System MAC presence check failed and rollback also failed: %v", rollbackErr),
-				macErr,
-			)
-		}
-		return errors.NewNetworkError("System MAC presence check failed", macErr)
-	}
+    // 3-1. MAC 기반 검증: 시스템 전체에서 해당 MAC을 가진 인터페이스 탐색
+    foundName, macErr := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress)
+    if macErr != nil || strings.TrimSpace(foundName) == "" {
+        // 시스템 어디에도 해당 MAC이 없으면 롤백
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("System MAC presence check failed and rollback also failed: %v", rollbackErr),
+                macErr,
+            )
+        }
+        return errors.NewNetworkError("System MAC presence check failed", macErr)
+    }
 
-	// (선택) UP 상태 확인: foundName 기준으로 확인
-	if uc.isInterfaceUp(ctx, foundName) {
-		uc.logger.WithFields(logrus.Fields{
-			"interface_name": foundName,
-			"mac_address":    iface.MacAddress,
-		}).Debug("Target interface is UP after apply")
-	}
+    // 3-2. UP 상태 확인: foundName 기준으로 확인
+    if !uc.isInterfaceUp(ctx, foundName) {
+        if rollbackErr := uc.performRollback(ctx, interfaceName.String(), "validation"); rollbackErr != nil {
+            return errors.NewNetworkError(
+                fmt.Sprintf("Interface not UP and rollback also failed"),
+                fmt.Errorf("interface %s not UP", foundName),
+            )
+        }
+        return errors.NewNetworkError("Interface is not UP after apply", fmt.Errorf("interface %s not UP", foundName))
+    }
 
 	// MTU/IPv4는 시스템 환경/외부 요인으로 즉시 반영이 지연될 수 있어, 성공 판정은 MAC/존재/UP 기준으로 제한합니다.
 	return nil
@@ -613,12 +617,14 @@ func (uc *ConfigureNetworkUseCase) findNetplanFileForInterface(interfaceName str
 
 // processInterfaceWithCheck는 개별 인터페이스를 처리하기 전에 필요성을 검사합니다
 func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
-	ctx context.Context,
-	iface entities.NetworkInterface,
-	osType interfaces.OSType,
-	processedCount, failedCount *int32,
-	failures *[]InterfaceFailure,
-	failuresMu *sync.Mutex,
+    ctx context.Context,
+    iface entities.NetworkInterface,
+    osType interfaces.OSType,
+    processedCount, failedCount *int32,
+    failures *[]InterfaceFailure,
+    failuresMu *sync.Mutex,
+    results *[]InterfaceResult,
+    resultsMu *sync.Mutex,
 ) error {
 	// 인터페이스 이름 생성 (기존에 할당된 이름이 있다면 재사용)
 	interfaceName, err := uc.namingService.GenerateNextNameForMAC(iface.MacAddress)
@@ -654,9 +660,13 @@ func (uc *ConfigureNetworkUseCase) processInterfaceWithCheck(
 				Reason:    err.Error(),
 			})
 			failuresMu.Unlock()
-		} else {
-			atomic.AddInt32(processedCount, 1)
-		}
+        } else {
+            atomic.AddInt32(processedCount, 1)
+            // 성공 결과 수집 (실제 사용된 이름 기준)
+            resultsMu.Lock()
+            *results = append(*results, InterfaceResult{ID: iface.ID, MAC: iface.MacAddress, Name: interfaceName.String(), Status: "Configured"})
+            resultsMu.Unlock()
+        }
 	}
 
 	return nil

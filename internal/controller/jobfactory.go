@@ -110,8 +110,7 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                             Image:           p.Image,
                             ImagePullPolicy: p.PullPolicy,
                             // 종료 전 대기를 강제하기 위해 셸 래퍼로 실행
-                            Command:         []string{"/bin/sh", "-c"},
-                            Args:            []string{"./multinic-agent; rc=$?; echo '[agent] delaying exit' >&2; sleep ${JOB_EXIT_DELAY_SECONDS:-5}; exit $rc"},
+                            Command:         []string{"./multinic-agent"},
                             Env: []corev1.EnvVar{
                                 {Name: "RUN_MODE", Value: "job"},
                                 {Name: "DATA_SOURCE", Value: "nodecr"},
@@ -119,8 +118,6 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                                 {Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
                                 {Name: "LOG_LEVEL", Value: "info"},
                                 {Name: "POLL_INTERVAL", Value: "30s"},
-                                // ensure the job pod stays alive for brief time for controller to harvest logs
-                                {Name: "JOB_EXIT_DELAY_SECONDS", Value: "5"},
                                 // optional action: cleanup
                                 {Name: "AGENT_ACTION", Value: p.Action},
                             },
