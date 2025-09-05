@@ -46,16 +46,16 @@ spec:
           value: {{ include "multinic-agent.serviceAccountName" . }}
         - name: CONTROLLER_JOB_TTL
           value: "{{ .Values.controller.jobTTLSeconds }}"
-      - name: CONTROLLER_JOB_DELETE_DELAY
-        value: "{{ .Values.controller.jobDeleteDelaySeconds | default "0" }}"
+        - name: CONTROLLER_JOB_DELETE_DELAY
+          value: "{{ .Values.controller.jobDeleteDelaySeconds | default "0" }}"
         
         # Metrics
         - name: CONTROLLER_METRICS_PORT
           value: "{{ .Values.controller.metricsPort | default "9090" }}"
         ports:
-        - name: metrics
-          containerPort: {{ .Values.controller.metricsPort | default 9090 }}
-          protocol: TCP
+          - name: metrics
+            containerPort: {{ .Values.controller.metricsPort | default 9090 }}
+            protocol: TCP
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
 {{- end }}
