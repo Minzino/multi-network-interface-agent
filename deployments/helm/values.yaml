@@ -46,5 +46,3 @@ controller:
   jobDeleteDelaySeconds: "30"
   # Prometheus metrics 포트
   metricsPort: "9090"
-  # Job 삭제 지연(초). 컨트롤러가 종료 메시지(실패 상세) 수집할 시간을 확보
-  jobDeleteDelaySeconds: "30"
