@@ -269,11 +269,13 @@ vi scripts/deploy.sh
 ### 설치
 
 #### 1단계: 컨테이너 이미지 배포
+
+**방법 A: 로컬 이미지 수동 배포 (Air-gap 환경)**
 ```bash
 # 사전 빌드된 이미지 사용 (권장)
 # deployments/images/ 디렉토리에 있는 tar 파일을 모든 노드에 배포
 
-# 방법 1: 스크립트로 모든 노드에 배포 (권장) - SSH 패스워드 사용
+# A-1: 스크립트로 모든 노드에 배포 (권장) - SSH 패스워드 사용
 NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
 for node in "${NODES[@]}"; do
     echo "Deploying to $node..."
@@ -281,7 +283,7 @@ for node in "${NODES[@]}"; do
     ssh root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
 done
 
-# 방법 1-2: SSH Key를 사용하는 경우
+# A-2: SSH Key를 사용하는 경우
 NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
 SSH_KEY_PATH="~/.ssh/id_rsa"  # SSH private key 경로
 for node in "${NODES[@]}"; do
@@ -290,12 +292,26 @@ for node in "${NODES[@]}"; do
     ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
 done
 
-# 방법 2: 개별 노드에 수동 배포
+# A-3: 개별 노드에 수동 배포
 scp deployments/images/multinic-agent-1.0.0.tar root@192.168.1.10:/tmp/
 ssh root@192.168.1.10 "nerdctl load -i /tmp/multinic-agent-1.0.0.tar"
 
-# 방법 3: 직접 빌드 (개발용)
+# A-4: 직접 빌드 (개발용)
 nerdctl build -t multinic-agent:1.0.0 .
+```
+
+**방법 B: Nexus Registry 사용 (Registry 환경)**
+```bash
+# B-1: Nexus에 이미지 푸시 (관리자 작업)
+nerdctl build -t multinic-agent:1.0.0 .
+nerdctl tag multinic-agent:1.0.0 nexus.your-domain.com:5000/multinic-agent:1.0.0
+nerdctl push nexus.your-domain.com:5000/multinic-agent:1.0.0
+
+# B-2: 인증이 필요한 경우 로그인
+nerdctl login nexus.your-domain.com:5000
+
+# B-3: 각 노드에서 자동으로 이미지 Pull (Kubernetes가 자동 처리)
+# helm install 시 --set image.repository=nexus.your-domain.com:5000/multinic-agent 사용
 ```
 
 #### 2단계: 네임스페이스 생성
