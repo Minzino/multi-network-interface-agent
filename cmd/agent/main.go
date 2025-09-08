@@ -101,7 +101,7 @@ func (a *Application) Run() error {
 
 	// 에이전트 정보 메트릭 설정
 	hostname, _ := os.Hostname()
-	metrics.SetAgentInfo("0.5.0", string(osType), hostname)
+	metrics.SetAgentInfo("1.0.0", string(osType), hostname)
 
 	// 헬스체크 서버 시작
 	if err := a.startHealthServer(cfg.Health.Port); err != nil {
@@ -137,25 +137,25 @@ func (a *Application) Run() error {
 	}
 
 	// RUN_MODE=job: 한 번 처리 후 종료
-    if cfg.Agent.RunMode == "job" {
-        a.logger.Info("MultiNIC agent started (run mode: job)")
-        // optional cleanup action
-        action := os.Getenv("AGENT_ACTION")
-        if strings.EqualFold(action, "cleanup") {
-            // 실행: 삭제 유스케이스만 수행
-            deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
-            if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
-                a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
-                return err
-            }
-            return nil
-        }
-        if err := a.processNetworkConfigurations(ctx); err != nil {
-            a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
-            return err
-        }
-        return nil
-    }
+	if cfg.Agent.RunMode == "job" {
+		a.logger.Info("MultiNIC agent started (run mode: job)")
+		// optional cleanup action
+		action := os.Getenv("AGENT_ACTION")
+		if strings.EqualFold(action, "cleanup") {
+			// 실행: 삭제 유스케이스만 수행
+			deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
+			if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
+				a.logger.WithError(err).Error("Failed to cleanup network (job mode)")
+				return err
+			}
+			return nil
+		}
+		if err := a.processNetworkConfigurations(ctx); err != nil {
+			a.logger.WithError(err).Error("Failed to process network configurations (job mode)")
+			return err
+		}
+		return nil
+	}
 
 	// 서비스 모드: 폴링 컨트롤러 시작
 	pollingController := polling.NewPollingController(strategy, a.logger)
@@ -210,16 +210,16 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-    // 설정 조회가 필요하면 사용 (현재 FullCleanup은 일반 적용 Job에서 사용하지 않음)
+	// 설정 조회가 필요하면 사용 (현재 FullCleanup은 일반 적용 Job에서 사용하지 않음)
 
 	// 1. 네트워크 삭제 유스케이스 실행 (고아 인터페이스 선정리)
 	//    - 이전 테스트에서 남은 multinic* netplan/ifcfg 파일을 먼저 정리하여
 	//      드리프트 경고 및 이름 충돌 가능성을 낮춥니다.
-    deleteInput := usecases.DeleteNetworkInput{
-        NodeName:    hostname,
-        // 일반 적용 Job에서는 고아만 정리(FullCleanup 금지). 전체 정리는 cleanup Job에서만.
-        FullCleanup: false,
-    }
+	deleteInput := usecases.DeleteNetworkInput{
+		NodeName: hostname,
+		// 일반 적용 Job에서는 고아만 정리(FullCleanup 금지). 전체 정리는 cleanup Job에서만.
+		FullCleanup: false,
+	}
 
 	deleteOutput, err := a.deleteUseCase.Execute(ctx, deleteInput)
 	if err != nil {
@@ -294,17 +294,17 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		// 종료 메시지(termination log)에 요약 정보 기록 (Controller가 읽어 로그로 표출 가능)
 		// 포맷: JSON {node, processed, failed, total, failures[], deleted_total, delete_errors, timestamp}
 		// 노드 이름은 위에서 resolveNodeName으로 구함
-        summary := map[string]any{
-            "node":          hostname,
-            "processed":     configOutput.ProcessedCount,
-            "failed":        configOutput.FailedCount,
-            "total":         configOutput.TotalCount,
-            "failures":      configOutput.Failures,
-            "results":       configOutput.Results,
-            "deleted_total": deletedTotal,
-            "delete_errors": deleteErrors,
-            "timestamp":     time.Now().Format(time.RFC3339),
-        }
+		summary := map[string]any{
+			"node":          hostname,
+			"processed":     configOutput.ProcessedCount,
+			"failed":        configOutput.FailedCount,
+			"total":         configOutput.TotalCount,
+			"failures":      configOutput.Failures,
+			"results":       configOutput.Results,
+			"deleted_total": deletedTotal,
+			"delete_errors": deleteErrors,
+			"timestamp":     time.Now().Format(time.RFC3339),
+		}
 		if b, err := json.Marshal(summary); err == nil {
 			// Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
 			_ = os.WriteFile("/dev/termination-log", b, 0644)
