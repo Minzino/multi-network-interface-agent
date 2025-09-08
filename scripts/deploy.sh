@@ -11,12 +11,17 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}🚀 MultiNIC Agent v1.0.0 배포 스크립트${NC}"
 
+# 사용법:
+# SSH 패스워드 인증: SSH_PASSWORD="your_password" ./deploy.sh
+# SSH Key 인증: SSH_KEY_PATH="~/.ssh/id_rsa" ./deploy.sh
+
 # 변수 설정
 IMAGE_NAME=${IMAGE_NAME:-"multinic-agent"}
 IMAGE_TAG=${IMAGE_TAG:-"1.0.0"}
 NAMESPACE=${NAMESPACE:-"multinic-system"}
 RELEASE_NAME=${RELEASE_NAME:-"multinic-agent"}
 SSH_PASSWORD=${SSH_PASSWORD:-"YOUR_SSH_PASSWORD"}
+SSH_KEY_PATH=${SSH_KEY_PATH:-""}  # SSH Key 경로 (설정시 Key 인증 사용)
 
 # 모든 노드 목록을 동적으로 가져오기
 ALL_NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
@@ -24,6 +29,17 @@ ALL_NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
 echo -e "이미지: ${BLUE}${IMAGE_NAME}:${IMAGE_TAG}${NC}"
 echo -e "네임스페이스: ${BLUE}${NAMESPACE}${NC}"
 echo -e "클러스터 노드: ${BLUE}${ALL_NODES[*]}${NC}"
+
+# SSH 인증 방식 확인
+if [ -n "$SSH_KEY_PATH" ]; then
+    echo -e "SSH 인증: ${BLUE}Key 인증 ($SSH_KEY_PATH)${NC}"
+    SSH_OPTIONS="-i $SSH_KEY_PATH -o StrictHostKeyChecking=no"
+    SCP_OPTIONS="-i $SSH_KEY_PATH -o StrictHostKeyChecking=no"
+else
+    echo -e "SSH 인증: ${BLUE}패스워드 인증${NC}"
+    SSH_OPTIONS="-o StrictHostKeyChecking=no"
+    SCP_OPTIONS="-o StrictHostKeyChecking=no"
+fi
 
 # 1. 네임스페이스 생성
 echo -e "\n${BLUE}1. 네임스페이스 설정${NC}"
@@ -72,18 +88,35 @@ for node in "${ALL_NODES[@]}"; do
         continue
     fi
     
-    # 이미지 파일 전송
-    if sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
-        # 원격 노드에서 이미지 로드
-        if sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
-            echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
+    # 이미지 파일 전송 (SSH 인증 방식에 따라 분기)
+    if [ -n "$SSH_KEY_PATH" ]; then
+        # SSH Key 인증 사용
+        if scp $SCP_OPTIONS ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
+            # 원격 노드에서 이미지 로드
+            if ssh $SSH_OPTIONS root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
+                echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
+            else
+                echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
+                exit 1
+            fi
         else
-            echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
+            echo -e "${RED}✗ ${node}: 이미지 전송 실패${NC}"
             exit 1
         fi
     else
-        echo -e "${RED}✗ ${node}: 이미지 전송 실패${NC}"
-        exit 1
+        # SSH 패스워드 인증 사용
+        if sshpass -p "$SSH_PASSWORD" scp $SCP_OPTIONS ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
+            # 원격 노드에서 이미지 로드
+            if sshpass -p "$SSH_PASSWORD" ssh $SSH_OPTIONS root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
+                echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
+            else
+                echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
+                exit 1
+            fi
+        else
+            echo -e "${RED}✗ ${node}: 이미지 전송 실패${NC}"
+            exit 1
+        fi
     fi
 done
 
@@ -147,7 +180,6 @@ echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
     --set image.tag=${IMAGE_TAG} \
-    --set namespace=${NAMESPACE} \
     --wait --timeout=300s; then
     echo -e "${GREEN}✓ Helm 차트 배포 완료${NC}"
 else

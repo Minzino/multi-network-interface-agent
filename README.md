@@ -129,7 +129,7 @@ sequenceDiagram
 ```bash
 helm upgrade --install multinic-agent ./deployments/helm \
   -n multinic-system \
-  --set agent.maxConcurrentTasks=1   # 초기엔 1로 권장(이름 경합 최소화)
+  --set image.tag=1.0.0
 ```
 
 수동 전체 정리(옵션):
@@ -273,12 +273,21 @@ vi scripts/deploy.sh
 # 사전 빌드된 이미지 사용 (권장)
 # deployments/images/ 디렉토리에 있는 tar 파일을 모든 노드에 배포
 
-# 방법 1: 스크립트로 모든 노드에 배포 (권장)
+# 방법 1: 스크립트로 모든 노드에 배포 (권장) - SSH 패스워드 사용
 NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
 for node in "${NODES[@]}"; do
     echo "Deploying to $node..."
     scp deployments/images/multinic-agent-1.0.0.tar root@$node:/tmp/
     ssh root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
+done
+
+# 방법 1-2: SSH Key를 사용하는 경우
+NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
+SSH_KEY_PATH="~/.ssh/id_rsa"  # SSH private key 경로
+for node in "${NODES[@]}"; do
+    echo "Deploying to $node..."
+    scp -i $SSH_KEY_PATH -o StrictHostKeyChecking=no deployments/images/multinic-agent-1.0.0.tar root@$node:/tmp/
+    ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
 done
 
 # 방법 2: 개별 노드에 수동 배포
@@ -304,15 +313,32 @@ kubectl get crd multinicnodeconfigs.multinic.io
 ```
 
 #### 4단계: MultiNic Agent 설치 (Controller 배포)
+
+**로컬 이미지 사용 시:**
 ```bash
 # Controller Deployment + RBAC + ServiceAccount 생성
-helm install multinic-agent ./deployments/helm \
+helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.0 \
-  --set controller.replicas=1 \
+  --wait --timeout=300s
+```
+
+**Nexus Registry 사용 시:**
+```bash
+# Nexus Registry에서 이미지 가져와서 배포
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set image.repository=nexus.your-domain.com:5000/multinic-agent \
+  --set image.tag=1.0.0 \
   --wait --timeout=300s
 
+# 다른 Registry 예시들:
+# --set image.repository=192.168.1.50:5000/multinic-agent
+# --set image.repository=nexus.company.com:8082/docker/multinic-agent
+```
+
+**배포 확인:**
+```bash
 # Controller 상태 확인
 kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
 ```
@@ -327,7 +353,6 @@ kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-con
 # 차트 업그레이드
 helm upgrade multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set agent.maxConcurrentTasks=1 \
   --set image.tag=1.0.1 \
   --wait --timeout=300s
 ```
