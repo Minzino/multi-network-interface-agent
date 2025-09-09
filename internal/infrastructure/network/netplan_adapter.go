@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"multinic-agent/internal/domain/constants"
 	"multinic-agent/internal/domain/entities"
 	"multinic-agent/internal/domain/errors"
 	"multinic-agent/internal/domain/interfaces"
@@ -33,7 +34,7 @@ func NewNetplanAdapter(
 		commandExecutor: executor,
 		fileSystem:      fs,
 		logger:          logger,
-		configDir:       "/etc/netplan",
+		configDir:       constants.NetplanConfigDir,
 	}
 }
 
@@ -52,9 +53,9 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
 
     // Decide rename policy: allow set-name only if the MAC-bound interface is not UP (or not present)
     renameAllowed := true
-    if curName, isUp, found := a.findInterfaceByMAC(ctx, iface.MacAddress); found && isUp {
+    if curName, isUp, found := a.findInterfaceByMAC(ctx, iface.MacAddress()); found && isUp {
         renameAllowed = false
-        a.logger.WithFields(logrus.Fields{"mac": iface.MacAddress, "current_name": curName}).Debug("Interface is UP - skip set-name to avoid rename")
+        a.logger.WithFields(logrus.Fields{"mac": iface.MacAddress(), "current_name": curName}).Debug("Interface is UP - skip set-name to avoid rename")
     }
 
     // Generate Netplan configuration
@@ -176,7 +177,7 @@ func (a *NetplanAdapter) applyNetplan(ctx context.Context) error {
 func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, interfaceName string, setName bool) map[string]interface{} {
     ethernetConfig := map[string]interface{}{
         "match": map[string]interface{}{
-            "macaddress": iface.MacAddress,
+            "macaddress": iface.MacAddress(),
         },
     }
     if setName {
@@ -184,25 +185,25 @@ func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, 
     }
 
 	// Static IP configuration: Both Address and CIDR must be present
-	if iface.Address != "" && iface.CIDR != "" {
-		// Extract prefix from CIDR (e.g., "10.0.0.0/24" -> "24")
-		parts := strings.Split(iface.CIDR, "/")
-		if len(parts) == 2 {
-			prefix := parts[1]
-			fullAddress := fmt.Sprintf("%s/%s", iface.Address, prefix)
+    if iface.Address() != "" && iface.CIDR() != "" {
+        // Extract prefix from CIDR (e.g., "10.0.0.0/24" -> "24")
+        parts := strings.Split(iface.CIDR(), "/")
+        if len(parts) == 2 {
+            prefix := parts[1]
+            fullAddress := fmt.Sprintf("%s/%s", iface.Address(), prefix)
 
-			ethernetConfig["dhcp4"] = false
-			ethernetConfig["addresses"] = []string{fullAddress}
-			if iface.MTU > 0 {
-				ethernetConfig["mtu"] = iface.MTU
-			}
-		} else {
-			a.logger.WithFields(logrus.Fields{
-				"address": iface.Address,
-				"cidr":    iface.CIDR,
-			}).Warn("Invalid CIDR format, skipping IP configuration")
-		}
-	}
+            ethernetConfig["dhcp4"] = false
+            ethernetConfig["addresses"] = []string{fullAddress}
+            if iface.MTU() > 0 {
+                ethernetConfig["mtu"] = iface.MTU()
+            }
+        } else {
+            a.logger.WithFields(logrus.Fields{
+                "address": iface.Address(),
+                "cidr":    iface.CIDR(),
+            }).Warn("Invalid CIDR format, skipping IP configuration")
+        }
+    }
 
 	config := map[string]interface{}{
 		"network": map[string]interface{}{
@@ -219,8 +220,8 @@ func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, 
 // extractInterfaceIndex extracts the index from interface name
 func extractInterfaceIndex(name string) int {
 	// multinic0 -> 0, multinic1 -> 1 etc
-	if strings.HasPrefix(name, "multinic") {
-		indexStr := strings.TrimPrefix(name, "multinic")
+	if strings.HasPrefix(name, constants.InterfacePrefix) {
+		indexStr := strings.TrimPrefix(name, constants.InterfacePrefix)
 		if index, err := strconv.Atoi(indexStr); err == nil {
 			return index
 		}

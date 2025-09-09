@@ -64,7 +64,7 @@ func (a *RHELAdapter) execCommand(ctx context.Context, command string, args ...s
 // Configure configures network interface by renaming device and creating ifcfg file.
 func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInterface, name entities.InterfaceName) error {
 	ifaceName := name.String()
-	macAddress := iface.MacAddress
+    macAddress := iface.MacAddress()
 
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
@@ -119,7 +119,7 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 	a.logger.WithFields(logrus.Fields{
 		"interface":   ifaceName,
 		"config_path": configPath,
-		"mac_address": iface.MacAddress,
+    	"mac_address": iface.MacAddress(),
 	}).Info("About to write ifcfg file")
 
 	// Log the full content in debug mode for troubleshooting
@@ -259,22 +259,22 @@ ONBOOT=yes
 BOOTPROTO=none`, ifaceName, ifaceName)
 
 	// Add IP configuration if available
-	if iface.Address != "" && iface.CIDR != "" {
-		// Extract prefix from CIDR
-		parts := strings.Split(iface.CIDR, "/")
-		if len(parts) == 2 {
-			prefix := parts[1]
-			content += fmt.Sprintf("\nIPADDR=%s\nPREFIX=%s", iface.Address, prefix)
-		}
-	}
+    if iface.Address() != "" && iface.CIDR() != "" {
+        // Extract prefix from CIDR
+        parts := strings.Split(iface.CIDR(), "/")
+        if len(parts) == 2 {
+            prefix := parts[1]
+            content += fmt.Sprintf("\nIPADDR=%s\nPREFIX=%s", iface.Address(), prefix)
+        }
+    }
 
 	// Add MTU if specified
-	if iface.MTU > 0 {
-		content += fmt.Sprintf("\nMTU=%d", iface.MTU)
-	}
+    if iface.MTU() > 0 {
+        content += fmt.Sprintf("\nMTU=%d", iface.MTU())
+    }
 
 	// Always add MAC address
-	content += fmt.Sprintf("\nHWADDR=%s", strings.ToLower(iface.MacAddress))
+    content += fmt.Sprintf("\nHWADDR=%s", strings.ToLower(iface.MacAddress()))
 
 	return content
 }
