@@ -210,7 +210,7 @@ func (uc *DeleteNetworkUseCase) findOrphanedNetplanFiles(ctx context.Context) ([
 	// MAC 주소 맵 생성 (빠른 조회를 위해)
 	activeMACAddresses := make(map[string]bool)
 	for _, iface := range activeInterfaces {
-		activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+		activeMACAddresses[strings.ToLower(iface.MacAddress())] = true
 	}
 
 	for _, fileName := range files {
@@ -354,7 +354,7 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 	activeMACAddresses := make(map[string]bool)
 	var activeMACList []string
 	for _, iface := range activeInterfaces {
-		macLower := strings.ToLower(iface.MacAddress)
+		macLower := strings.ToLower(iface.MacAddress())
 		activeMACAddresses[macLower] = true
 		activeMACList = append(activeMACList, macLower)
 	}
