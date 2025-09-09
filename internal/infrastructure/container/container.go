@@ -33,8 +33,9 @@ type Container struct {
 
 	// 서비스들
 	healthService  *health.HealthService
-	namingService  *services.InterfaceNamingService
-	networkFactory *network.NetworkManagerFactory
+    namingService  *services.InterfaceNamingService
+    driftDetector  *services.DriftDetector
+    networkFactory *network.NetworkManagerFactory
 
 	// 레포지토리
 	repository interfaces.NetworkInterfaceRepository
@@ -143,8 +144,11 @@ func (c *Container) initializeServices() error {
 	// 헬스 서비스
 	c.healthService = health.NewHealthService(c.clock, c.logger)
 
-	// 인터페이스 네이밍 서비스
-	c.namingService = services.NewInterfaceNamingService(c.fileSystem, c.commandExecutor)
+    // 인터페이스 네이밍 서비스
+    c.namingService = services.NewInterfaceNamingService(c.fileSystem, c.commandExecutor)
+
+    // 드리프트 디텍터 서비스
+    c.driftDetector = services.NewDriftDetector(c.fileSystem, c.logger, c.namingService)
 
 	// 네트워크 관리자 팩토리
 	c.networkFactory = network.NewNetworkManagerFactory(
@@ -172,16 +176,18 @@ func (c *Container) initializeUseCases() error {
 	}
 
 	// 네트워크 설정 유스케이스
-	c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCase(
-		c.repository,
-		configurer,
-		rollbacker,
-		c.namingService,
-		c.fileSystem,
-		c.osDetector,
-		c.logger,
-		c.config.Agent.MaxConcurrentTasks,
-	)
+    c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCaseWithDetector(
+        c.repository,
+        configurer,
+        rollbacker,
+        c.namingService,
+        c.fileSystem,
+        c.osDetector,
+        c.logger,
+        c.config.Agent.MaxConcurrentTasks,
+        c.driftDetector,
+        c.config.Agent.CommandTimeout,
+    )
 
 	// 네트워크 삭제 유스케이스
 	c.deleteNetworkUseCase = usecases.NewDeleteNetworkUseCase(
