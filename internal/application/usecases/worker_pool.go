@@ -26,7 +26,7 @@ type WorkerPool[T any] struct {
     retryPolicy  RetryPolicy[T]
     panicHandler func(job T, recovered any)
     active       atomic.Int64
-    after        func(job T, status string, duration time.Duration, attempt int)
+    after        func(job T, status string, duration time.Duration, attempt int, err error)
 }
 
 // WorkerPoolOption configures WorkerPool behavior.
@@ -35,7 +35,7 @@ type WorkerPoolOption[T any] func(*WorkerPool[T])
 func WithPoolName[T any](name string) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.name = name } }
 func WithRetryPolicy[T any](policy RetryPolicy[T]) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.retryPolicy = policy } }
 func WithPanicHandler[T any](h func(T, any)) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.panicHandler = h } }
-func WithAfterHook[T any](h func(job T, status string, dur time.Duration, attempt int)) WorkerPoolOption[T] {
+func WithAfterHook[T any](h func(job T, status string, dur time.Duration, attempt int, err error)) WorkerPoolOption[T] {
     return func(p *WorkerPool[T]) { p.after = h }
 }
 
@@ -73,6 +73,7 @@ func (p *WorkerPool[T]) StartE(ctx context.Context, handler func(context.Context
 
                     start := time.Now()
                     status := "success"
+                    var lastErr error
                     func() {
                         defer func() {
                             if r := recover(); r != nil {
@@ -86,6 +87,7 @@ func (p *WorkerPool[T]) StartE(ctx context.Context, handler func(context.Context
                         }()
 
                         if err := handler(ctx, env.payload); err != nil {
+                            lastErr = err
                             // retry decision
                             if p.retryPolicy != nil {
                                 if retry, backoff := p.retryPolicy(env.payload, err, env.attempt); retry {
@@ -118,7 +120,7 @@ func (p *WorkerPool[T]) StartE(ctx context.Context, handler func(context.Context
                     // Call after-hook only for terminal states (success/failed/panic)
                     if p.after != nil && (status == "success" || status == "failed" || status == "panic") {
                         // pass duration as time.Duration for convenience
-                        p.after(env.payload, status, time.Duration(dur*float64(time.Second)), env.attempt)
+                        p.after(env.payload, status, time.Duration(dur*float64(time.Second)), env.attempt, lastErr)
                     }
 
                     // done: update active

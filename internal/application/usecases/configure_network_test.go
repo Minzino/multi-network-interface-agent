@@ -30,7 +30,7 @@ func createTestInterface(id int, nodeName, macAddr, ipAddr, cidr string, mtu int
 
 // Mock 구현체들
 type MockNetworkInterfaceRepository struct {
-	mock.Mock
+    mock.Mock
 }
 
 func (m *MockNetworkInterfaceRepository) GetPendingInterfaces(ctx context.Context, nodeName string) ([]entities.NetworkInterface, error) {
@@ -59,8 +59,53 @@ func (m *MockNetworkInterfaceRepository) GetActiveInterfaces(ctx context.Context
 }
 
 func (m *MockNetworkInterfaceRepository) GetAllNodeInterfaces(ctx context.Context, nodeName string) ([]entities.NetworkInterface, error) {
-	args := m.Called(ctx, nodeName)
-	return args.Get(0).([]entities.NetworkInterface), args.Error(1)
+    args := m.Called(ctx, nodeName)
+    return args.Get(0).([]entities.NetworkInterface), args.Error(1)
+}
+
+// 추가 검증: 실패 시 요약에 Reason이 반영되는지 확인
+func TestConfigureNetworkUseCase_FailureReasonRecorded(t *testing.T) {
+    repo := new(MockNetworkInterfaceRepository)
+    configurer := new(MockNetworkConfigurer)
+    rollbacker := new(MockNetworkRollbacker)
+    fs := new(MockFileSystem)
+    osd := new(MockOSDetector)
+
+    osd.On("DetectOS").Return(interfaces.OSTypeUbuntu, nil)
+    iface := *createTestInterface(1, "node", "00:11:22:33:44:55", "10.0.0.2", "10.0.0.0/24", 1500)
+    repo.On("GetAllNodeInterfaces", mock.Anything, "node").Return([]entities.NetworkInterface{iface}, nil)
+
+    // 네임 예약에서 존재하지 않음 처리
+    for i := 0; i < 10; i++ {
+        fs.On("Exists", fmt.Sprintf("/sys/class/net/multinic%d", i)).Return(false).Maybe()
+    }
+    configurer.On("GetConfigDir").Return("/etc/netplan")
+    fs.On("ListFiles", "/etc/netplan").Return([]string{}, nil)
+    fs.On("Exists", "/etc/netplan/90-multinic0.yaml").Return(false)
+
+    // Configure 단계에서 실패 발생
+    configurer.On("Configure", mock.Anything, iface, mock.MatchedBy(func(n entities.InterfaceName) bool { return n.String() == "multinic0" })).Return(errors.New("unit-failure"))
+    rollbacker.On("Rollback", mock.Anything, "multinic0").Return(nil).Maybe()
+    repo.On("UpdateInterfaceStatus", mock.Anything, 1, entities.StatusFailed).Return(nil)
+
+    // Command executor mocks required by naming service
+    exec := new(MockCommandExecutor)
+    // container env check
+    exec.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").Return([]byte{}, fmt.Errorf("not in container")).Maybe()
+    // nmcli listing (unused here but called by naming sometimes)
+    exec.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "nmcli", "-t", "-f", "NAME", "c", "show").Return([]byte(""), nil).Maybe()
+    // ip addr show multinic0 -> does not exist
+    exec.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "addr", "show", "multinic0").Return([]byte(""), fmt.Errorf("Device \"multinic0\" does not exist")).Maybe()
+
+    naming := services.NewInterfaceNamingService(fs, exec)
+    logger := logrus.New(); logger.SetLevel(logrus.FatalLevel)
+    uc := NewConfigureNetworkUseCase(repo, configurer, rollbacker, naming, fs, osd, logger, 1)
+    out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})
+    require.NoError(t, err)
+    require.NotNil(t, out)
+    require.Equal(t, 1, out.FailedCount)
+    require.Len(t, out.Failures, 1)
+    require.Contains(t, out.Failures[0].Reason, "unit-failure")
 }
 
 type MockNetworkConfigurer struct {

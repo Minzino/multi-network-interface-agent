@@ -178,7 +178,7 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
         WithPanicHandler[entities.NetworkInterface](func(job entities.NetworkInterface, r any) {
             uc.logger.WithField("interface_id", job.ID()).Errorf("panic recovered: %v", r)
         }),
-        WithAfterHook[entities.NetworkInterface](func(job entities.NetworkInterface, status string, _ time.Duration, _ int) {
+        WithAfterHook[entities.NetworkInterface](func(job entities.NetworkInterface, status string, _ time.Duration, _ int, lastErr error) {
             // 최종 상태에서만 카운팅/결과 집계
             if status == "success" {
                 atomic.AddInt32(&processedCount, 1)
@@ -190,13 +190,14 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
                 // 상태 업데이트: 실패로 마킹
                 _ = uc.repository.UpdateInterfaceStatus(context.Background(), job.ID(), entities.StatusFailed)
                 failuresMu.Lock()
-                *&failures = append(failures, InterfaceFailure{
+                failure := InterfaceFailure{
                     ID:        job.ID(),
                     MAC:       job.MacAddress(),
                     Name:      func() string { if name != nil { return name.String() }; return "" }(),
-                    ErrorType: "UNKNOWN",
-                    Reason:    "final failure",
-                })
+                    ErrorType: func() string { if lastErr != nil { return uc.getErrorType(lastErr) }; return "unknown" }(),
+                    Reason:    func() string { if lastErr != nil { return lastErr.Error() }; return "final failure" }(),
+                }
+                failures = append(failures, failure)
                 failuresMu.Unlock()
                 wg.Done()
             }
