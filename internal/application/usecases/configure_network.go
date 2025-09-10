@@ -7,6 +7,7 @@ import (
     "multinic-agent/internal/domain/errors"
     "multinic-agent/internal/domain/interfaces"
     "multinic-agent/internal/domain/services"
+    domconst "multinic-agent/internal/domain/constants"
     "multinic-agent/internal/infrastructure/metrics"
     "strings"
     "sync"
@@ -33,6 +34,9 @@ type ConfigureNetworkUseCase struct {
     processor  *ProcessingUseCase
     // unified per-interface operation timeout
     opTimeout time.Duration
+    // retry settings
+    maxRetries       int
+    backoffMultiplier float64
 }
 
 // NewConfigureNetworkUseCase는 새로운 ConfigureNetworkUseCase를 생성합니다
@@ -49,7 +53,11 @@ func NewConfigureNetworkUseCase(
 ) *ConfigureNetworkUseCase {
     // Backward-compatible constructor: build a default DriftDetector
     drift := services.NewDriftDetector(fs, logger, naming)
-    return NewConfigureNetworkUseCaseWithDetector(repo, configurer, rollbacker, naming, fs, osDetector, logger, maxConcurrentTasks, drift, time.Duration(0))
+    return NewConfigureNetworkUseCaseWithDetector(
+        repo, configurer, rollbacker, naming, fs, osDetector, logger,
+        maxConcurrentTasks, drift, time.Duration(0),
+        domconst.DefaultMaxRetries, domconst.DefaultBackoffMultiplier,
+    )
 }
 
 // NewConfigureNetworkUseCaseWithDetector allows injecting a custom DriftDetector
@@ -64,6 +72,8 @@ func NewConfigureNetworkUseCaseWithDetector(
     maxConcurrentTasks int,
     drift *services.DriftDetector,
     opTimeout time.Duration,
+    maxRetries int,
+    backoffMultiplier float64,
 ) *ConfigureNetworkUseCase {
     uc := &ConfigureNetworkUseCase{
         repository:         repo,
@@ -76,6 +86,8 @@ func NewConfigureNetworkUseCaseWithDetector(
         maxConcurrentTasks: maxConcurrentTasks,
         driftDetector:      drift,
         opTimeout:          opTimeout,
+        maxRetries:         maxRetries,
+        backoffMultiplier:  backoffMultiplier,
     }
     // wire sub usecases
     uc.applier = &ApplyUseCase{parent: uc}
@@ -156,26 +168,81 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
         results        []InterfaceResult
     )
 
-    // 2. 워커풀 기반 병렬 처리
-    pool := NewWorkerPool[entities.NetworkInterface](maxWorkers, len(allInterfaces))
-    stop := pool.Start(ctx, func(pctx context.Context, job entities.NetworkInterface) {
-        defer wg.Done()
+    // 2. 워커풀 기반 병렬 처리 (리트라이/메트릭/패닉복구 포함)
+    queueSize := len(allInterfaces)
+    pool := NewWorkerPool[entities.NetworkInterface](
+        maxWorkers,
+        queueSize,
+        WithPoolName[entities.NetworkInterface]("configure"),
+        WithRetryPolicy[entities.NetworkInterface](uc.retryPolicy()),
+        WithPanicHandler[entities.NetworkInterface](func(job entities.NetworkInterface, r any) {
+            uc.logger.WithField("interface_id", job.ID()).Errorf("panic recovered: %v", r)
+        }),
+        WithAfterHook[entities.NetworkInterface](func(job entities.NetworkInterface, status string, _ time.Duration, _ int) {
+            // 최종 상태에서만 카운팅/결과 집계
+            if status == "success" {
+                atomic.AddInt32(&processedCount, 1)
+                wg.Done()
+            } else {
+                atomic.AddInt32(&failedCount, 1)
+                // 실패 상세 수집 (이 시점에는 이름이 생성되었을 수 있으나, 최소 정보 보장)
+                name, _ := uc.namingService.GenerateNextNameForMAC(job.MacAddress())
+                // 상태 업데이트: 실패로 마킹
+                _ = uc.repository.UpdateInterfaceStatus(context.Background(), job.ID(), entities.StatusFailed)
+                failuresMu.Lock()
+                *&failures = append(failures, InterfaceFailure{
+                    ID:        job.ID(),
+                    MAC:       job.MacAddress(),
+                    Name:      func() string { if name != nil { return name.String() }; return "" }(),
+                    ErrorType: "UNKNOWN",
+                    Reason:    "final failure",
+                })
+                failuresMu.Unlock()
+                wg.Done()
+            }
+        }),
+    )
+
+    stop := pool.StartE(ctx, func(pctx context.Context, job entities.NetworkInterface) error {
         // per-interface timeout
         timeout := uc.opTimeout
         if timeout <= 0 { timeout = 30 * time.Second }
         jctx, cancel := context.WithTimeout(pctx, timeout)
         defer cancel()
 
-        if err := uc.processInterfaceWithCheck(jctx, job, osType, &processedCount, &failedCount, &failures, &failuresMu, &results, &resultsMu); err != nil {
-            uc.logger.WithError(err).Error("Critical error processing interface")
+        // 이름/처리 필요성 검사 후 실제 처리. 실패는 에러로 반환하여 워커풀이 재시도 여부를 판단하게 함.
+        // 성공 시 결과 집계는 after-hook에서 최종적으로 처리.
+        interfaceName, err := uc.namingService.GenerateNextNameForMAC(job.MacAddress())
+        if err != nil {
+            uc.handleInterfaceError("interface name generation", job.ID(), job.MacAddress(), err)
+            return err
         }
+        shouldProcess, _ := uc.checkNeedProcessing(jctx, job, *interfaceName, osType)
+        if !shouldProcess {
+            // 처리할 필요가 없으면 성공으로 간주하고 결과 집계
+            resultsMu.Lock()
+            results = append(results, InterfaceResult{ID: job.ID(), MAC: job.MacAddress(), Name: interfaceName.String(), Status: "Configured"})
+            resultsMu.Unlock()
+            return nil
+        }
+
+        if err := uc.processor.Process(jctx, job, *interfaceName); err != nil {
+            // 오류는 그대로 반환(재시도 판단은 RetryPolicy). 최종 실패 시 after-hook에서 카운팅.
+            return err
+        }
+        // 성공: 결과 수집
+        resultsMu.Lock()
+        results = append(results, InterfaceResult{ID: job.ID(), MAC: job.MacAddress(), Name: interfaceName.String(), Status: "Configured"})
+        resultsMu.Unlock()
+        return nil
     })
     for _, iface := range allInterfaces {
         wg.Add(1)
         pool.Submit(iface)
     }
-    stop()
     wg.Wait()
+    // 모든 작업의 최종 상태가 완료되었음을 보장한 후 채널을 닫는다
+    stop()
 
     return &ConfigureNetworkOutput{
         ProcessedCount: int(atomic.LoadInt32(&processedCount)),
@@ -184,6 +251,41 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
         Failures:       failures,
         Results:        results,
     }, nil
+}
+
+// retryPolicy는 도메인 에러 타입에 따라 재시도 여부와 백오프를 결정합니다.
+func (uc *ConfigureNetworkUseCase) retryPolicy() RetryPolicy[entities.NetworkInterface] {
+    maxRetries := uc.maxRetries
+    if maxRetries <= 0 { maxRetries = domconst.DefaultMaxRetries }
+    multiplier := uc.backoffMultiplier
+    if multiplier <= 0 { multiplier = domconst.DefaultBackoffMultiplier }
+    base := 100 * time.Millisecond
+    return func(job entities.NetworkInterface, err error, attempt int) (bool, time.Duration) {
+        // 재시도 횟수 제한
+        if attempt >= maxRetries { return false, 0 }
+        // 에러 타입 판별
+        var derr *errors.DomainError
+        if errors2, ok := any(err).(*errors.DomainError); ok {
+            derr = errors2
+        }
+        if derr == nil {
+            // unwrap 시도
+            // no-op: 보수적으로 재시도 1회 허용
+            return true, time.Duration(float64(base) * pow(multiplier, attempt))
+        }
+        switch derr.Type {
+        case errors.ErrorTypeTimeout, errors.ErrorTypeNetwork, errors.ErrorTypeSystem, errors.ErrorTypeResource:
+            return true, time.Duration(float64(base) * pow(multiplier, attempt))
+        default:
+            return false, 0
+        }
+    }
+}
+
+func pow(a float64, n int) float64 {
+    p := 1.0
+    for i := 0; i < n; i++ { p *= a }
+    return p
 }
 
 // processInterface는 개별 인터페이스를 처리합니다

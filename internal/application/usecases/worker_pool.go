@@ -26,6 +26,7 @@ type WorkerPool[T any] struct {
     retryPolicy  RetryPolicy[T]
     panicHandler func(job T, recovered any)
     active       atomic.Int64
+    after        func(job T, status string, duration time.Duration, attempt int)
 }
 
 // WorkerPoolOption configures WorkerPool behavior.
@@ -34,6 +35,9 @@ type WorkerPoolOption[T any] func(*WorkerPool[T])
 func WithPoolName[T any](name string) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.name = name } }
 func WithRetryPolicy[T any](policy RetryPolicy[T]) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.retryPolicy = policy } }
 func WithPanicHandler[T any](h func(T, any)) WorkerPoolOption[T] { return func(p *WorkerPool[T]) { p.panicHandler = h } }
+func WithAfterHook[T any](h func(job T, status string, dur time.Duration, attempt int)) WorkerPoolOption[T] {
+    return func(p *WorkerPool[T]) { p.after = h }
+}
 
 func NewWorkerPool[T any](workers, queueSize int, opts ...WorkerPoolOption[T]) *WorkerPool[T] {
     if workers <= 0 { workers = 1 }
@@ -110,6 +114,12 @@ func (p *WorkerPool[T]) StartE(ctx context.Context, handler func(context.Context
 
                     dur := time.Since(start).Seconds()
                     infraMetrics.ObserveWorkerTask(p.name, status, dur)
+
+                    // Call after-hook only for terminal states (success/failed/panic)
+                    if p.after != nil && (status == "success" || status == "failed" || status == "panic") {
+                        // pass duration as time.Duration for convenience
+                        p.after(env.payload, status, time.Duration(dur*float64(time.Second)), env.attempt)
+                    }
 
                     // done: update active
                     p.active.Add(-1)

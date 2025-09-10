@@ -187,6 +187,8 @@ func (c *Container) initializeUseCases() error {
         c.config.Agent.MaxConcurrentTasks,
         c.driftDetector,
         c.config.Agent.CommandTimeout,
+        c.config.Agent.MaxRetries,
+        c.config.Agent.Backoff.Multiplier,
     )
 
 	// 네트워크 삭제 유스케이스
