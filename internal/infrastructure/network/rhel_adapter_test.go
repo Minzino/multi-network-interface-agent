@@ -17,11 +17,11 @@ import (
 
 // mustCreateInterfaceName는 테스트용 InterfaceName을 생성합니다
 func mustCreateInterfaceName(name string) entities.InterfaceName {
-	iface, err := entities.NewInterfaceName(name)
-	if err != nil {
-		panic(err)
-	}
-	return iface
+    iface, err := entities.NewInterfaceName(name)
+    if err != nil {
+        panic(err)
+    }
+    return *iface
 }
 
 // MockCommandExecutor는 테스트용 Mock CommandExecutor입니다
@@ -96,9 +96,10 @@ func TestRHELAdapter_Configure_OLD_DISABLED(t *testing.T) {
 	}{
 		{
 			name: "성공적인 인터페이스 설정 - IP 없음",
-			iface: entities.NetworkInterface{
-				MacAddress: "fa:16:3e:00:be:63",
-			},
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(1, "fa:16:3e:00:be:63", "node", "", "10.0.0.0/24", 1500)
+                return *ni
+            }(),
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
 				// Container check for adapter initialization
@@ -159,12 +160,10 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 		},
 		{
 			name: "성공적인 인터페이스 설정 - 정적 IP",
-			iface: entities.NetworkInterface{
-				MacAddress: "fa:16:3e:00:be:63",
-				Address:    "192.168.1.100",
-				CIDR:       "192.168.1.0/24",
-				MTU:        1500,
-			},
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(1, "fa:16:3e:00:be:63", "node", "192.168.1.100", "192.168.1.0/24", 1500)
+                return *ni
+            }(),
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
 				// Container check for adapter initialization
@@ -230,9 +229,10 @@ eth0      abcdefgh-abcd-abcd-abcd-abcdefghijkl  ethernet  eth0`
 		},
 		{
 			name: "connection add 실패",
-			iface: entities.NetworkInterface{
-				MacAddress: "fa:16:3e:00:be:63",
-			},
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(1, "fa:16:3e:00:be:63", "node", "", "10.0.0.0/24", 1500)
+                return *ni
+            }(),
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
 				// Container check for adapter initialization
@@ -267,9 +267,10 @@ lo         loopback  unmanaged  --`
 		},
 		{
 			name: "connection up 실패시 롤백",
-			iface: entities.NetworkInterface{
-				MacAddress: "fa:16:3e:00:be:63",
-			},
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(1, "fa:16:3e:00:be:63", "node", "", "10.0.0.0/24", 1500)
+                return *ni
+            }(),
 			interfaceName: mustCreateInterfaceName("multinic0"),
 			setupMocks: func(m *MockCommandExecutor) {
 				// Container check for adapter initialization
@@ -527,17 +528,15 @@ func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
 		actualDevice   string
 		expectedFields []string
 	}{
-		{
-			name: "정적 IP와 MTU가 있는 인터페이스",
-			iface: entities.NetworkInterface{
-				MacAddress: "FA:16:3E:BB:93:7A",
-				Address:    "192.168.1.100",
-				CIDR:       "192.168.1.0/24",
-				MTU:        1500,
-			},
-			ifaceName:    "multinic0",
-			actualDevice: "ens7",
-			expectedFields: []string{
+        {
+            name: "정적 IP와 MTU가 있는 인터페이스",
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(1, "FA:16:3E:BB:93:7A", "node", "192.168.1.100", "192.168.1.0/24", 1500)
+                return *ni
+            }(),
+            ifaceName:    "multinic0",
+            actualDevice: "ens7",
+            expectedFields: []string{
 				"id=multinic0",
 				"interface-name=ens7",
 				"mac-address=FA:16:3E:BB:93:7A",
@@ -547,17 +546,15 @@ func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
 				"method=disabled", // IPv6
 			},
 		},
-		{
-			name: "IP 없는 인터페이스",
-			iface: entities.NetworkInterface{
-				MacAddress: "FA:16:3E:C6:48:12",
-				Address:    "",
-				CIDR:       "",
-				MTU:        0,
-			},
-			ifaceName:    "multinic1",
-			actualDevice: "ens8",
-			expectedFields: []string{
+        {
+            name: "IP 없는 인터페이스",
+            iface: func() entities.NetworkInterface {
+                ni, _ := entities.NewNetworkInterface(2, "FA:16:3E:C6:48:12", "node", "0.0.0.0", "0.0.0.0/0", 1500)
+                return *ni
+            }(),
+            ifaceName:    "multinic1",
+            actualDevice: "ens8",
+            expectedFields: []string{
 				"id=multinic1",
 				"interface-name=ens8",
 				"mac-address=FA:16:3E:C6:48:12",
