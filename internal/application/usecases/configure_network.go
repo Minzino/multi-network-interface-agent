@@ -37,6 +37,8 @@ type ConfigureNetworkUseCase struct {
     // retry settings
     maxRetries       int
     backoffMultiplier float64
+    // preflight behavior
+    preflightBlockIfUP bool
 }
 
 // NewConfigureNetworkUseCase는 새로운 ConfigureNetworkUseCase를 생성합니다
@@ -57,6 +59,7 @@ func NewConfigureNetworkUseCase(
         repo, configurer, rollbacker, naming, fs, osDetector, logger,
         maxConcurrentTasks, drift, time.Duration(0),
         domconst.DefaultMaxRetries, domconst.DefaultBackoffMultiplier,
+        false, // default: do not block when interface is UP in preflight
     )
 }
 
@@ -74,6 +77,7 @@ func NewConfigureNetworkUseCaseWithDetector(
     opTimeout time.Duration,
     maxRetries int,
     backoffMultiplier float64,
+    preflightBlockIfUP bool,
 ) *ConfigureNetworkUseCase {
     uc := &ConfigureNetworkUseCase{
         repository:         repo,
@@ -88,6 +92,7 @@ func NewConfigureNetworkUseCaseWithDetector(
         opTimeout:          opTimeout,
         maxRetries:         maxRetries,
         backoffMultiplier:  backoffMultiplier,
+        preflightBlockIfUP: preflightBlockIfUP,
     }
     // wire sub usecases
     uc.applier = &ApplyUseCase{parent: uc}
@@ -271,8 +276,12 @@ func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface ent
     }
     // If we cannot determine presence due to an error, proceed (do not block)
     if err != nil { return nil }
-    // Optional: we do not block when interface is UP here to avoid false negatives in tests.
-    // Runtime safety around UP interfaces should be handled in drift detection/adapter logic.
+    // Optional: block if interface is UP (configurable)
+    if uc.preflightBlockIfUP {
+        if uc.isInterfaceUp(ctx, foundName) {
+            return errors.NewValidationError("preflight: target interface is UP", fmt.Errorf("interface %s is up", foundName))
+        }
+    }
     return nil
 }
 
