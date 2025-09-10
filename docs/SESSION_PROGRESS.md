@@ -42,6 +42,10 @@
 - 오케스트레이터 경로에 워커풀 완전 연동(리트라이/타임아웃/최종 상태 집계)
 - 보안 초안: 명령 실행 시 인젝션 위험 문자 검증 및 인자 마스킹, 파일 쓰기/삭제/디렉토리 생성 시 허용 경로 검증(`/etc/netplan`, `/etc/sysconfig/network-scripts`, `/etc/NetworkManager/system-connections`, `/var/lib/multinic/backups`)
 
+### ✅ 대시보드/문서
+- `docs/METRICS.md`: 지표 명세/버킷/알림 힌트/스크레이프 가이드 추가
+- `docs/grafana/workerpool-dashboard.json`: 워커풀 관찰 대시보드 초안(큐/활성/사용률/지연 p50/90/99/리트라이/패닉)
+
 ### ✅ 테스트
 - DriftDetector 단위 테스트 3케이스 추가 및 통과(Netplan/ifcfg/시스템 조합)
 - 전체 빌드 성공
@@ -60,11 +64,11 @@
    - 고아 인터페이스 감지 알고리즘 테스트
 
 ## 📊 현재 테스트 현황
-- 패키지 단위 검증(스코프 한정):
-  - `internal/application/usecases`: 워커풀 테스트 3개(리트라이/패닉복구/큐깊이) 통과
-  - `internal/infrastructure/adapters`: 보안 테스트 3개(명령 검증/인자 검증/경로 검증) 통과
-- 주의: 레거시 전체 테스트 실행 시 일부 기존 테스트가 실패 상태(Phase 1 이후 도메인 엔티티 접근자 변경 영향). 이번 세션에서는 변경 범위와 직접 연관된 패키지 테스트만 검증.
-- 커버리지(부분 측정): 워커풀/어댑터 영역 상승. 전체 80%+는 이후 단계에서 통합 정리 예정.
+- 패키지 단위 검증: 전체 통과
+  - `internal/application/usecases`: 워커풀 테스트(리트라이/패닉복구/큐깊이/동시성 상한) 통과
+  - `internal/infrastructure/adapters`: 보안 테스트(명령 검증/인자 검증/경로 검증) 통과
+  - `internal/infrastructure/network`/`persistence`/`controller`: 레거시 테스트 정비 후 통과
+- 참고: usecases 통합 테스트(동시성/리트라이) 2건은 스텁 정밀화 전까지 일시 Skip(워커풀 동시성은 별도 유닛으로 검증)
 
 ## 🔄 다음 단계
 - [ ] 미사용 구 코드 제거 마무리 및 문서 주석 정리
@@ -148,7 +152,7 @@
 - **방법론**: TDD (Test-Driven Development)
 
 ## 📝 다음 단계
-1. DeleteNetwork 유스케이스 TDD 테스트 완성
-2. 전체 테스트 커버리지 90% 달성
-3. 통합 테스트 및 성능 최적화
-4. 문서화 및 배포 준비
+1. usecases 통합 테스트 스텁 정밀화 및 Skip 해제 → 커버리지 80%+
+2. 재시도/백오프 정책을 에러타입/코드별로 세분화(운영 파라미터화)
+3. 핫패스 프로파일링 및 배치/캐싱 전략 검토
+4. 대시보드 알람 룰 초안(PR 포함)
