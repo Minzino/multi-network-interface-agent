@@ -72,6 +72,56 @@ var (
 		},
 	)
 
+	// 워커풀 메트릭 (Phase 2)
+	WorkerQueueDepth = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_queue_depth",
+			Help: "Current queued jobs in worker pool",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerActive = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_active",
+			Help: "Number of active workers processing jobs",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerUtilization = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_utilization",
+			Help: "Worker utilization ratio (active/total)",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerTaskDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "multinic_worker_task_duration_seconds",
+			Help:    "Task processing duration per worker pool",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"pool", "status"}, // status: success, failed, panic, retried
+	)
+
+	WorkerRetries = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "multinic_worker_task_retries_total",
+			Help: "Total number of task retries",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerPanics = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "multinic_worker_panics_total",
+			Help: "Total number of panics recovered in workers",
+		},
+		[]string{"pool"},
+	)
+
 	// 드리프트 감지 메트릭
 	ConfigurationDrifts = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -137,7 +187,31 @@ func RecordDrift(driftType string) {
 
 // SetConcurrentTasks는 현재 동시 처리 중인 작업 수를 설정합니다
 func SetConcurrentTasks(count float64) {
-	ConcurrentTasks.Set(count)
+		ConcurrentTasks.Set(count)
+}
+
+// Worker 메트릭: 편의 헬퍼
+func SetWorkerQueueDepth(pool string, depth int) {
+    WorkerQueueDepth.WithLabelValues(pool).Set(float64(depth))
+}
+
+func SetWorkerActive(pool string, active, total int) {
+    WorkerActive.WithLabelValues(pool).Set(float64(active))
+    if total > 0 {
+        WorkerUtilization.WithLabelValues(pool).Set(float64(active) / float64(total))
+    }
+}
+
+func ObserveWorkerTask(pool, status string, durationSeconds float64) {
+    WorkerTaskDuration.WithLabelValues(pool, status).Observe(durationSeconds)
+}
+
+func IncWorkerRetry(pool string) {
+    WorkerRetries.WithLabelValues(pool).Inc()
+}
+
+func IncWorkerPanic(pool string) {
+    WorkerPanics.WithLabelValues(pool).Inc()
 }
 
 // SetBackoffLevel은 현재 백오프 레벨을 설정합니다
