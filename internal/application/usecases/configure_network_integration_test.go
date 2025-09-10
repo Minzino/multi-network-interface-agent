@@ -56,20 +56,15 @@ func (s *stubExec) ExecuteWithTimeout(ctx context.Context, _ time.Duration, cmd 
     if cmd == "nmcli" { return []byte(""), nil }
     if cmd == "ip" {
         if len(args) >= 3 && args[0] == "addr" && args[1] == "show" {
-            // Return a MAC for the requested interface if known
+            // ReserveNamesForInterfaces expects non-existence for multinicX candidates.
+            // Only eth0 is assumed to exist with a MAC.
             ifName := args[2]
             if ifName == "eth0" && len(s.macs) > 0 {
                 return []byte(fmt.Sprintf("link/ether %s brd ff:ff:ff:ff:ff:ff", s.macs[0])), nil
             }
-            var idx int
-            if n, _ := fmt.Sscanf(ifName, "multinic%d", &idx); n == 1 {
-                if idx >= 0 && idx < len(s.macs) {
-                    return []byte(fmt.Sprintf("link/ether %s brd ff:ff:ff:ff:ff:ff", s.macs[idx])), nil
-                }
-            }
             return []byte(""), fmt.Errorf("Device does not exist")
         }
-        if len(args) >= 4 && args[0] == "-o" && args[1] == "link" && args[2] == "show" {
+        if len(args) >= 3 && args[0] == "-o" && args[1] == "link" && args[2] == "show" {
             out := ""
             for i, mac := range s.macs {
                 if i == 0 {
@@ -130,7 +125,6 @@ func (s *stubRollbacker) Rollback(ctx context.Context, name string) error { retu
 // --- Tests ---
 
 func TestConfigureNetwork_ConcurrencyCap(t *testing.T) {
-    t.Skip("pending: refine exec/fs/naming stubs to fully pass end-to-end; WorkerPool concurrency covered separately")
     // Prepare 10 interfaces
     var ifaces []entities.NetworkInterface
     for i := 0; i < 10; i++ {
@@ -150,7 +144,7 @@ func TestConfigureNetwork_ConcurrencyCap(t *testing.T) {
     ex := &stubExec{macs: macs}
     osd := &stubOS{}
     naming := services.NewInterfaceNamingService(fs, ex)
-    logger := logrus.New(); logger.SetLevel(logrus.FatalLevel)
+    logger := logrus.New(); logger.SetLevel(logrus.DebugLevel)
 
     uc := NewConfigureNetworkUseCaseWithDetector(
         repo, cfg, rb, naming, fs, osd, logger,
@@ -159,6 +153,7 @@ func TestConfigureNetwork_ConcurrencyCap(t *testing.T) {
         2*time.Second, // op timeout
         1, // maxRetries
         2.0, // backoff multiplier
+        false, // preflightBlockIfUP
     )
 
     out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})
@@ -173,7 +168,6 @@ func TestConfigureNetwork_ConcurrencyCap(t *testing.T) {
 }
 
 func TestConfigureNetwork_RetryEventuallySucceeds(t *testing.T) {
-    t.Skip("pending: refine exec/fs/naming stubs for end-to-end retry flow")
     ni, err := entities.NewNetworkInterface(1, "02:00:00:00:00:01", "node", "10.0.0.2", "10.0.0.0/24", 1500)
     require.NoError(t, err)
     repo := &stubRepo{ifaces: []entities.NetworkInterface{*ni}}
@@ -183,7 +177,7 @@ func TestConfigureNetwork_RetryEventuallySucceeds(t *testing.T) {
     ex := &stubExec{macs: []string{"02:00:00:00:00:01"}}
     osd := &stubOS{}
     naming := services.NewInterfaceNamingService(fs, ex)
-    logger := logrus.New(); logger.SetLevel(logrus.FatalLevel)
+    logger := logrus.New(); logger.SetLevel(logrus.DebugLevel)
 
     uc := NewConfigureNetworkUseCaseWithDetector(
         repo, cfg, rb, naming, fs, osd, logger,
@@ -192,6 +186,7 @@ func TestConfigureNetwork_RetryEventuallySucceeds(t *testing.T) {
         time.Second,
         2, // allow at least one retry
         2.0,
+        false, // preflightBlockIfUP
     )
 
     out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})
