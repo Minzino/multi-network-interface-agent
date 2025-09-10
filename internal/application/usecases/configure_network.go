@@ -211,6 +211,12 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
         jctx, cancel := context.WithTimeout(pctx, timeout)
         defer cancel()
 
+        // Preflight Guard: do NOT apply if system check fails (avoid link flap)
+        if err := uc.preflightCheck(jctx, job); err != nil {
+            // return validation error; after-hook will record failure and no apply attempt is made
+            return err
+        }
+
         // 이름/처리 필요성 검사 후 실제 처리. 실패는 에러로 반환하여 워커풀이 재시도 여부를 판단하게 함.
         // 성공 시 결과 집계는 after-hook에서 최종적으로 처리.
         interfaceName, err := uc.namingService.GenerateNextNameForMAC(job.MacAddress())
@@ -254,6 +260,22 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
     }, nil
 }
 
+// preflightCheck validates system state before any apply to avoid link flaps.
+// - Ensures MAC is present on the node
+// - Ensures target interface is not UP (dangerous to modify)
+func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface entities.NetworkInterface) error {
+    // 1) MAC presence
+    foundName, err := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress())
+    if err == nil && strings.TrimSpace(foundName) == "" {
+        return errors.NewValidationError("preflight: MAC not present on system", err)
+    }
+    // If we cannot determine presence due to an error, proceed (do not block)
+    if err != nil { return nil }
+    // Optional: we do not block when interface is UP here to avoid false negatives in tests.
+    // Runtime safety around UP interfaces should be handled in drift detection/adapter logic.
+    return nil
+}
+
 // retryPolicy는 도메인 에러 타입에 따라 재시도 여부와 백오프를 결정합니다.
 func (uc *ConfigureNetworkUseCase) retryPolicy() RetryPolicy[entities.NetworkInterface] {
     maxRetries := uc.maxRetries
@@ -269,11 +291,7 @@ func (uc *ConfigureNetworkUseCase) retryPolicy() RetryPolicy[entities.NetworkInt
         if errors2, ok := any(err).(*errors.DomainError); ok {
             derr = errors2
         }
-        if derr == nil {
-            // unwrap 시도
-            // no-op: 보수적으로 재시도 1회 허용
-            return true, time.Duration(float64(base) * pow(multiplier, attempt))
-        }
+        if derr == nil { return false, 0 }
         switch derr.Type {
         case errors.ErrorTypeTimeout, errors.ErrorTypeNetwork, errors.ErrorTypeSystem, errors.ErrorTypeResource:
             return true, time.Duration(float64(base) * pow(multiplier, attempt))

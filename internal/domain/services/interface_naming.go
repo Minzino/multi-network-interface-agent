@@ -217,17 +217,17 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	defer cancel()
 
 	// ip addr show 명령어로 특정 인터페이스 정보 조회
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "addr", "show", interfaceName)
-	if err != nil {
-		return "", fmt.Errorf("인터페이스 %s 정보 조회 실패: %w", interfaceName, err)
-	}
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "addr", "show", interfaceName)
+    if err != nil {
+        return "", fmt.Errorf("failed to query interface %s: %w", interfaceName, err)
+    }
 
 	// MAC 주소 추출 (예: "link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff")
 	macRegex := regexp.MustCompile(`link/ether\s+([a-fA-F0-9:]{17})`)
 	matches := macRegex.FindStringSubmatch(string(output))
-	if len(matches) < 2 {
-		return "", fmt.Errorf("인터페이스 %s에서 MAC 주소를 찾을 수 없습니다", interfaceName)
-	}
+    if len(matches) < 2 {
+        return "", fmt.Errorf("could not find MAC address on interface %s", interfaceName)
+    }
 
 	return matches[1], nil
 }
@@ -275,10 +275,10 @@ func (s *InterfaceNamingService) FindInterfaceNameByMAC(macAddress string) (stri
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "-o", "link", "show")
-	if err != nil {
-		return "", fmt.Errorf("시스템 인터페이스 나열 실패: %w", err)
-	}
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "-o", "link", "show")
+    if err != nil {
+        return "", fmt.Errorf("failed to list system interfaces: %w", err)
+    }
 
 	macLower := strings.ToLower(strings.TrimSpace(macAddress))
 	// 예: "2: ens3: <...> mtu ... qdisc ... state ... link/ether fa:16:3e:e8:ae:9d brd ..."
@@ -294,7 +294,7 @@ func (s *InterfaceNamingService) FindInterfaceNameByMAC(macAddress string) (stri
 			}
 		}
 	}
-	return "", fmt.Errorf("MAC %s 를 가진 인터페이스를 찾지 못했습니다", macAddress)
+    return "", fmt.Errorf("interface with MAC %s not found", macAddress)
 }
 
 // IsMacPresent는 시스템에 해당 MAC을 가진 인터페이스가 존재하는지 여부를 반환합니다.
