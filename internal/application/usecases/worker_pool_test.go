@@ -9,6 +9,7 @@ import (
 
     "github.com/prometheus/client_golang/prometheus/testutil"
     "github.com/stretchr/testify/require"
+    "sync/atomic"
 )
 
 func TestWorkerPool_RetryPolicyAndMetrics(t *testing.T) {
@@ -102,4 +103,35 @@ func TestWorkerPool_QueueDepthGauge(t *testing.T) {
 
     depth := testutil.ToFloat64(infraMetrics.WorkerQueueDepth.WithLabelValues(poolName))
     require.Equal(t, float64(2), depth)
+}
+
+func TestWorkerPool_ConcurrencyCap(t *testing.T) {
+    poolName := "conc"
+    workers := 3
+    p := NewWorkerPool[int](workers, 20, WithPoolName[int](poolName))
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+
+    var current, maxObserved int32
+    stop := p.StartE(ctx, func(_ context.Context, job int) error {
+        cur := atomic.AddInt32(&current, 1)
+        // update maxObserved atomically
+        for {
+            max := atomic.LoadInt32(&maxObserved)
+            if cur > max {
+                if atomic.CompareAndSwapInt32(&maxObserved, max, cur) { break }
+                continue
+            }
+            break
+        }
+        time.Sleep(20 * time.Millisecond)
+        atomic.AddInt32(&current, -1)
+        return nil
+    })
+    defer stop()
+
+    for i := 0; i < 10; i++ { p.Submit(i) }
+    // wait for queue to drain
+    time.Sleep(400 * time.Millisecond)
+    require.LessOrEqual(t, int(maxObserved), workers)
 }
