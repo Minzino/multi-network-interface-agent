@@ -39,6 +39,7 @@
 ### ✅ Phase 2 착수(성능/보안/운영성)
 - 워커풀 메트릭 추가: `queue_depth`, `worker_active`, `worker_utilization`, `task_duration{status}`
 - 워커풀 기능 강화: 옵션 패턴(이름/리트라이/패닉핸들러), 재시도 정책 훅, 패닉 복구, 지표 연동
+- 오케스트레이터 경로에 워커풀 완전 연동(리트라이/타임아웃/최종 상태 집계)
 - 보안 초안: 명령 실행 시 인젝션 위험 문자 검증 및 인자 마스킹, 파일 쓰기/삭제/디렉토리 생성 시 허용 경로 검증(`/etc/netplan`, `/etc/sysconfig/network-scripts`, `/etc/NetworkManager/system-connections`, `/var/lib/multinic/backups`)
 
 ### ✅ 테스트
