@@ -41,6 +41,9 @@
 - 워커풀 기능 강화: 옵션 패턴(이름/리트라이/패닉핸들러), 재시도 정책 훅, 패닉 복구, 지표 연동
 - 오케스트레이터 경로에 워커풀 완전 연동(리트라이/타임아웃/최종 상태 집계)
 - 보안 초안: 명령 실행 시 인젝션 위험 문자 검증 및 인자 마스킹, 파일 쓰기/삭제/디렉토리 생성 시 허용 경로 검증(`/etc/netplan`, `/etc/sysconfig/network-scripts`, `/etc/NetworkManager/system-connections`, `/var/lib/multinic/backups`)
+ - Preflight Guard 도입: 적용 전 시스템 MAC 존재 확인(미존재 시 적용 없이 실패 처리 → 링크 플랩 방지)
+ - 로그/메시지 영어화: Naming/오류 메시지 영어 일원화(Job summary reason 포함)
+ - 재시도 정책 정교화: DomainError(Timeout/Network/System/Resource)만 재시도 대상으로 인정
 
 ### ✅ 대시보드/문서
 - `docs/METRICS.md`: 지표 명세/버킷/알림 힌트/스크레이프 가이드 추가
@@ -69,6 +72,7 @@
   - `internal/infrastructure/adapters`: 보안 테스트(명령 검증/인자 검증/경로 검증) 통과
   - `internal/infrastructure/network`/`persistence`/`controller`: 레거시 테스트 정비 후 통과
 - 참고: usecases 통합 테스트(동시성/리트라이) 2건은 스텁 정밀화 전까지 일시 Skip(워커풀 동시성은 별도 유닛으로 검증)
+ - 카나리 관찰: 잘못된 MAC 포함 시 기존 빌드에서는 적용→검증→롤백 순서로 링크 플랩 가능성 확인. 최신 빌드(Preflight Guard) 배포 시 해당 항목은 적용 없이 즉시 실패 처리로 전환됨.
 
 ## 🔄 다음 단계
 - [ ] 미사용 구 코드 제거 마무리 및 문서 주석 정리
@@ -153,6 +157,13 @@
 
 ## 📝 다음 단계
 1. usecases 통합 테스트 스텁 정밀화 및 Skip 해제 → 커버리지 80%+
-2. 재시도/백오프 정책을 에러타입/코드별로 세분화(운영 파라미터화)
-3. 핫패스 프로파일링 및 배치/캐싱 전략 검토
-4. 대시보드 알람 룰 초안(PR 포함)
+2. (옵션) Preflight에서 인터페이스 UP 차단을 설정 가능 옵션으로 추가(운영 정책 반영)
+3. 재시도/백오프 정책을 에러타입/코드별로 세분화(운영 파라미터화)
+4. CI 강화: `-race`/goleak 활성화
+5. 대시보드 알람 룰 초안(PR 포함): 큐 깊이/실패율/리트라이/패닉 급증
+6. AgentInfo에 버전 라벨 노출 및 컨트롤러 시작 로그에 커밋/버전 출력(운영 추적성)
+
+## 🔎 운영 메모(OpenStack)
+- MTU 1450(오버레이) 여부 확인 후 CR의 MTU 값 조정 권장
+- 테스트 NIC는 운영 트래픽 미사용/NIC DOWN 상태에서 시작 시 검증 명확
+- 최신 이미지(Preflight Guard 포함)로 카나리 2노드×NIC 4개 재검증 권장
