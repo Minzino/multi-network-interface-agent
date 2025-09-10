@@ -66,6 +66,74 @@
 - [ ] Phase 3: 민감정보 마스킹/경로 검증/명령 인젝션 방어 강화
 - [ ] 커버리지 80%+ 달성 위한 단위/통합 테스트 보강
 
+---
+
+## ▶️ 다음 세션 준비 (핵심 요약)
+
+- 브랜치: `refactor/phase1-configure-usecase-extract`
+- 현재 상태: Phase 1(아키텍처 정리) 완료, Phase 2(성능/보안/운영성) 준비 완료
+- 주요 변경 요점
+  - DriftDetector 서비스 도입(파일/시스템 상태 기반 드리프트 판정)
+  - Orchestrator(Apply/Validate/Processing) 분리로 가독성/테스트성↑
+  - 워커풀 기반 동시 처리 전환 + per-interface 타임아웃 일원화
+  - 어댑터/레포지토리 정합성(엔티티 접근자/생성자) 정리
+- 중요한 운영 파라미터
+  - `MAX_CONCURRENT_TASKS`: 동시에 처리할 인터페이스 수(초기 권장 2~5)
+  - `COMMAND_TIMEOUT`: 인터페이스 1건 처리 타임아웃(기본 30s)
+
+### 다음 세션 Kickoff 체크리스트
+- [ ] `go build ./...`로 빌드 확인
+- [ ] 서비스 테스트: `go test ./internal/domain/services -run DriftDetector -v`
+- [ ] 운영 파라미터 시범값 설정(`MAX_CONCURRENT_TASKS`, `COMMAND_TIMEOUT`)
+- [ ] 메트릭/로그에 워커풀 관측 지표 설계(큐 깊이, 워커 사용률, 처리 지연)
+- [ ] 보안 로깅 정책(민감정보 마스킹) 초안 확정
+
+### 다음 세션 Backlog(우선순위 제안)
+1) 성능/운영성
+   - 워커풀 메트릭 추가(큐 길이, 워커 사용률, 처리 지연 히스토그램)
+   - 재시도/재등록 정책 훅, 패닉 복구
+   - 파일/명령 호출 배치·캐싱 전략 검토
+2) 보안 강화
+   - 로그 마스킹(MAC/IP), 파일 경로 검증, 명령 인젝션 방어
+3) 테스트 강화
+   - Orchestrator/워커풀 경로 유닛/통합 테스트 보강, 커버리지 80%+
+
+---
+
+## 🪄 매직 프롬프트 (다음 세션 복사용)
+
+다음 프롬프트를 복사해 새 세션 시작 시 붙여넣으면, 본 레포의 컨텍스트와 작업 원칙을 빠르게 주입할 수 있습니다.
+
+```
+당신은 Go 기반 MultiNIC Agent 리팩터링을 이어받는 시니어 엔지니어입니다. 다음 원칙을 반드시 지키십시오.
+
+목표와 컨텍스트
+- 레포: multinic-agent (Go, Clean Architecture)
+- 상태: Phase 1(아키텍처 정리) 완료, Phase 2(성능/보안/운영성) 수행
+- 브랜치: refactor/phase1-configure-usecase-extract
+- 핵심 구조: ConfigureNetworkUseCase(오케스트레이터) + DriftDetector + WorkerPool
+- 운영 파라미터: MAX_CONCURRENT_TASKS(동시 처리 수), COMMAND_TIMEOUT(인터페이스별 타임아웃)
+
+작업 원칙
+1) 작은 커밋, 한글 커밋 메시지(Conventional Commits)로 의미 단위 기록
+2) SESSION_PROGRESS.md에 진행사항/체크리스트 반드시 반영
+3) 동작 변경 시 반드시 테스트(가능하면 단위→통합 순)
+4) 성능/보안/운영성 영향 항목은 근거와 함께 설명
+5) 기존 스타일/접근자/생성자 규약 준수(엔티티는 New* + 게터 사용)
+6) DI/컨테이너 변경 시 영향 범위를 명확히 기술
+
+이번 세션 우선순위(제안)
+- 워커풀 메트릭(큐 깊이, 워커 사용률, 처리 지연) 추가
+- 재시도/재등록 정책 훅 및 패닉 복구
+- 로그 마스킹·경로 검증·명령 인젝션 방어 초안
+- 테스트 강화로 커버리지 80%+ 접근
+
+출력 형식
+- 먼저 계획(작은 단계) → 변경(코드/패치) → 검증(빌드/테스트) → 문서 반영(SESSION_PROGRESS.md)
+- 필요시 선택지 제시 및 명확한 권고안 포함
+```
+
+
 ## 🔧 기술 스택
 - **언어**: Go 1.24.4
 - **테스팅**: testify/mock, testify/assert
