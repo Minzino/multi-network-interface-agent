@@ -271,11 +271,10 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface entities.NetworkInterface) error {
     // 1) MAC presence
     foundName, err := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress())
-    if err == nil && strings.TrimSpace(foundName) == "" {
+    // Block when MAC is not present or lookup failed to ensure safety (avoid apply+rollback link flaps)
+    if err != nil || strings.TrimSpace(foundName) == "" {
         return errors.NewValidationError("preflight: MAC not present on system", err)
     }
-    // If we cannot determine presence due to an error, proceed (do not block)
-    if err != nil { return nil }
     // Optional: block if interface is UP (configurable)
     if uc.preflightBlockIfUP {
         if uc.isInterfaceUp(ctx, foundName) {
