@@ -39,8 +39,6 @@ type AgentConfig struct {
     DataSource         string // 데이터 소스 선택: "db" | "nodecr"
     NodeCRNamespace    string // nodecr 선택 시, 조회할 네임스페이스 (기본: multinic-system)
     RunMode            string // "service"(default) or "job"
-    // Preflight options
-    PreflightBlockIfUP bool // if true, block apply when target interface (by MAC) is UP
 }
 
 // BackoffConfig is a struct that holds backoff configuration
@@ -96,7 +94,6 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
             DataSource:      getEnvOrDefault("DATA_SOURCE", "db"),
             NodeCRNamespace: getEnvOrDefault("NODE_CR_NAMESPACE", constants.DefaultNodeCRNamespace),
             RunMode:         getEnvOrDefault("RUN_MODE", constants.RunModeService.String()),
-            PreflightBlockIfUP: getEnvBoolOrDefault("PREFLIGHT_BLOCK_IF_UP", false),
         },
         Health: HealthConfig{
             Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
