@@ -52,30 +52,50 @@ fi
 
 # 2. 필수 도구 확인
 echo -e "\n${BLUE}2. 필수 도구 확인${NC}"
-commands=("nerdctl" "helm" "kubectl" "sshpass")
-for cmd in "${commands[@]}"; do
-    if ! command -v $cmd &> /dev/null; then
-        echo -e "${RED}✗ $cmd가 설치되어 있지 않습니다${NC}"
-        exit 1
-    fi
+# 필수: helm, kubectl, sshpass
+for cmd in helm kubectl sshpass; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo -e "${RED}✗ $cmd가 설치되어 있지 않습니다${NC}"; exit 1
+  fi
 done
-echo -e "${GREEN}✓ 모든 필수 도구 확인 완료${NC}"
+
+# 이미지 빌더 선택: nerdctl > docker > podman
+if command -v nerdctl &>/dev/null; then
+  BUILDER=nerdctl
+elif command -v docker &>/dev/null; then
+  BUILDER=docker
+elif command -v podman &>/dev/null; then
+  BUILDER=podman
+else
+  echo -e "${RED}✗ 이미지 빌더(nerdctl/docker/podman)가 없습니다${NC}"; exit 1
+fi
+echo -e "${GREEN}✓ 모든 필수 도구 확인 완료 (builder: ${BUILDER})${NC}"
 
 # 3. 이미지 빌드
 echo -e "\n${BLUE}3. 이미지 빌드${NC}"
-if nerdctl build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
-    echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"
-else
-    echo -e "${RED}✗ 이미지 빌드 실패${NC}"
-    exit 1
-fi
+case "$BUILDER" in
+  nerdctl)
+    if nerdctl build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
+      echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"; else echo -e "${RED}✗ 이미지 빌드 실패${NC}"; exit 1; fi;;
+  docker)
+    export DOCKER_BUILDKIT=1
+    if docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
+      echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"; else echo -e "${RED}✗ 이미지 빌드 실패${NC}"; exit 1; fi;;
+  podman)
+    if podman build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
+      echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"; else echo -e "${RED}✗ 이미지 빌드 실패${NC}"; exit 1; fi;;
+esac
 
 # 4. 이미지를 모든 노드에 배포
 echo -e "\n${BLUE}4. 모든 노드에 이미지 배포${NC}"
 TMP_IMAGE_FILE="/tmp/${IMAGE_NAME}-${IMAGE_TAG}.tar"
 
 echo -e "${YELLOW}이미지 저장 중...${NC}"
-nerdctl save ${IMAGE_NAME}:${IMAGE_TAG} -o ${TMP_IMAGE_FILE}
+case "$BUILDER" in
+  nerdctl) nerdctl save ${IMAGE_NAME}:${IMAGE_TAG} -o ${TMP_IMAGE_FILE};;
+  docker)  docker save -o ${TMP_IMAGE_FILE} ${IMAGE_NAME}:${IMAGE_TAG};;
+  podman)  podman save -o ${TMP_IMAGE_FILE} ${IMAGE_NAME}:${IMAGE_TAG};;
+esac
 
 CURRENT_NODE=$(hostname)
 
