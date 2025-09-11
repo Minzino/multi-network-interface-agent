@@ -9,6 +9,9 @@ const (
 	RHELNetworkScriptsDir = "/etc/sysconfig/network-scripts"
 	NetworkManagerDir     = "/etc/NetworkManager/system-connections"
 
+	// systemd-udev 링크 이름 매핑(.link) 경로 (영구 인터페이스 네이밍)
+	SystemdNetworkDir = "/etc/systemd/network"
+
 	// OS 감지 관련 경로
 	OSReleaseFile = "/host/etc/os-release"
 

@@ -28,6 +28,7 @@ func isSafeConfigPath(p string) bool {
         domconst.NetplanConfigDir,
         domconst.RHELNetworkScriptsDir,
         domconst.NetworkManagerDir,
+        domconst.SystemdNetworkDir,
         domconst.DefaultBackupDir,
     }
     for _, base := range allowed {
