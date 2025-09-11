@@ -11,6 +11,9 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 - **자동화 워크플로우**: CR 생성/수정 시 즉시 해당 노드에 Agent Job 스케줄링
 - **노드별 맞춤 실행**: 각 노드의 SystemUUID 검증 후 네트워크 인터페이스 자동 설정
 - **실시간 상태 동기화**: Job 완료 후 Controller가 자동으로 CR status 업데이트
+- **라우팅 충돌 방지**: 전역 라우팅 직렬화로 네트워크 테이블 안정성 보장
+- **SELinux 지원**: RHEL 환경에서 파일 레이블 자동 복원 (선택적 활성화)
+- **성능 최적화**: 안정성 우선 동시성 제어 (기본 1개 작업, 설정 가능)
 
 ### 동작 방식
 1. **Controller (Deployment)**: CR 변경사항을 실시간 감시
@@ -112,24 +115,59 @@ sequenceDiagram
     Controller->>K8s: Job 정리 (TTL)
 ```
 
-## ⚙️ Agent Job 동작(중요 변경)
+## ⚙️ Agent Job 동작 및 보안 기능
 
-- 시작 시 정리 수행(RUN_MODE=job):
+### 네트워크 구성 프로세스
+- **시작 시 정리 수행**(RUN_MODE=job):
   - Ubuntu: `/etc/netplan/9*-multinic*.yaml`만 삭제 후 `netplan apply` 실행
   - RHEL: `/etc/sysconfig/network-scripts/ifcfg-multinic*`만 삭제
   - 시스템 기본 파일(`50-cloud-init.yaml` 등)은 건드리지 않음
   - 남아있는 `multinic0~9` 인터페이스는 DOWN 상태일 때만 altname(ens*/enp*)으로 rename 시도(없으면 스킵)
-- 이름 충돌 방지(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
-- 검증 방식 전환(이름→MAC):
+
+- **이름 충돌 방지**(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
+
+- **검증 방식 전환**(이름→MAC):
   - 적용 후 검증은 `ip -o link show` 전체에서 CR의 MAC 존재 여부로 판단(특정 이름에 의존하지 않음)
-- 처리 순서: “정리 → 설정(적용) → 검증”으로 실행
+
+- **처리 순서**: "정리 → 설정(적용) → 검증"으로 실행
+
+### 보안 및 안정성 기능
+- **SELinux 지원** (RHEL 환경):
+  - 네트워크 설정 파일 생성 후 `restorecon -Rv` 자동 실행
+  - NetworkManager/udev가 파일을 정상 읽을 수 있도록 SELinux context 복원
+  - 컨테이너 환경에서 `nsenter`를 통한 호스트 실행
+  - 기본 비활성화, 필요시 옵션으로 활성화 가능
+
+- **라우팅 충돌 방지**:
+  - 전역 mutex를 통한 라우팅 테이블 직렬화
+  - 동시 네트워크 설정으로 인한 라우팅 테이블 경쟁 상태 방지
+  - 라우팅 작업 메트릭 수집 (실행 시간, 성공/실패율)
+
+- **동시성 제어 최적화**:
+  - 기본 최대 동시 작업 수: 1개 (안정성 우선)
+  - Helm values를 통한 설정 가능 (`maxConcurrentTasks`)
+  - 대규모 환경에서 라우팅 충돌 최소화
   
 
-권장 값(초기 구동 안정화):
+### 권장 배포 설정 (안정성 우선)
 ```bash
+# 기본 설정 (안정성 최우선)
 helm upgrade --install multinic-agent ./deployments/helm \
   -n multinic-system \
-  --set image.tag=1.0.0
+  --set image.tag=1.0.0 \
+  --set maxConcurrentTasks=1
+
+# 대규모 환경 (성능 우선시)
+helm upgrade --install multinic-agent ./deployments/helm \
+  -n multinic-system \
+  --set image.tag=1.0.0 \
+  --set maxConcurrentTasks=3
+
+# RHEL 환경 (SELinux 활성화)
+helm upgrade --install multinic-agent ./deployments/helm \
+  -n multinic-system \
+  --set image.tag=1.0.0 \
+  --set rhelAdapter.enableSELinuxRestore=true
 ```
 
 수동 전체 정리(옵션):
@@ -149,12 +187,13 @@ multinic-agent/
 │   ├── domain/               # 도메인 계층
 │   │   ├── entities/         # NetworkInterface, InterfaceName
 │   │   ├── interfaces/       # Repository, Network 인터페이스
-│   │   └── services/         # InterfaceNamingService
+│   │   └── services/         # InterfaceNamingService, RoutingCoordinator
 │   ├── application/          # 애플리케이션 계층
 │   │   └── usecases/        # ConfigureNetwork, DeleteNetwork
 │   ├── infrastructure/       # 인프라스트럭처 계층
 │   │   ├── persistence/     # MySQL Repository
-│   │   ├── network/         # Netplan, RHEL Adapter
+│   │   ├── network/         # Netplan, RHEL Adapter (SELinux 지원)
+│   │   ├── metrics/         # Prometheus 메트릭 수집
 │   │   └── config/         # 설정 관리
 │   └── controller/          # Controller 구현
 │       ├── reconciler.go   # CR 처리 로직
@@ -409,6 +448,8 @@ SSH_PASSWORD=${SSH_PASSWORD:-"배포 대상 ssh password 입력"}
 - 🎯 CRD 설치 (`kubectl apply`)
 - ⚙️ Helm 차트 배포 (`helm upgrade --install`)
 - ✅ 배포 상태 확인
+- 🔒 보안 설정 자동 적용 (SELinux, 라우팅 직렬화)
+- 📊 메트릭 수집 활성화
 
 ## ✅ 배포 완료 확인
 
@@ -444,4 +485,125 @@ kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metad
 root@bastion:~/multinic-agent# kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metadata.name,STATE:.status.state
 NAME                  STATE
 viola2-biz-master03   Configured
+```
+
+## ⚙️ 고급 설정 옵션
+
+### Helm Values 설정 (values.yaml)
+
+#### 기본 성능 설정
+```yaml
+# 동시성 제어 (안정성 vs 성능 균형)
+maxConcurrentTasks: 1          # 기본값: 안정성 우선 (1-10 권장)
+
+# 이미지 설정
+image:
+  repository: multinic-agent
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+```
+
+#### RHEL 환경 SELinux 설정
+```yaml
+# RHEL SELinux 지원 활성화
+rhelAdapter:
+  enableSELinuxRestore: false  # 기본값: 비활성화
+                              # true로 설정시 파일 생성 후 restorecon 자동 실행
+```
+
+#### 리소스 및 보안 설정
+```yaml
+# Pod 리소스 제한
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# 보안 컨텍스트
+securityContext:
+  runAsNonRoot: false          # 네트워크 설정을 위해 root 권한 필요
+  privileged: true             # 호스트 네트워크 접근 필요
+```
+
+### 환경별 배포 예시
+
+#### 개발/테스트 환경 (빠른 반복)
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set maxConcurrentTasks=3 \
+  --set image.pullPolicy=Always \
+  --set resources.limits.cpu=1000m \
+  --set resources.limits.memory=1Gi
+```
+
+#### 프로덕션 환경 (안정성 최우선)
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set maxConcurrentTasks=1 \
+  --set resources.limits.cpu=500m \
+  --set resources.limits.memory=512Mi \
+  --set rhelAdapter.enableSELinuxRestore=true  # RHEL 환경에서
+```
+
+#### 대규모 클러스터 (성능 최적화)
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set maxConcurrentTasks=5 \
+  --set resources.limits.cpu=1000m \
+  --set resources.limits.memory=1Gi \
+  --set nodeSelector.node-role\\.kubernetes\\.io/worker=""
+```
+
+### 모니터링 및 로깅
+
+#### 메트릭 확인 (Prometheus 연동시)
+```bash
+# 라우팅 작업 메트릭 확인
+curl http://localhost:8080/metrics | grep routing
+
+# 예상 메트릭:
+# routing_operation_duration_seconds_sum
+# routing_operation_duration_seconds_count  
+# routing_operation_total{operation="configure",result="success"}
+```
+
+#### 로그 모니터링
+```bash
+# Controller 로그 (CR 처리 과정)
+kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller -f
+
+# Agent Job 로그 (실제 네트워크 설정)
+kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-job -f
+```
+
+### 문제 해결
+
+#### 자주 발생하는 이슈와 해결책
+
+**1. SELinux 관련 오류 (RHEL 환경)**
+```bash
+# 문제: NetworkManager가 설정 파일을 읽지 못함
+# 해결: SELinux 복원 활성화
+--set rhelAdapter.enableSELinuxRestore=true
+```
+
+**2. 라우팅 테이블 충돌**
+```bash
+# 문제: 동시 네트워크 설정으로 라우팅 경쟁
+# 해결: 동시성 줄이기
+--set maxConcurrentTasks=1
+```
+
+**3. 리소스 부족**
+```bash
+# 문제: Job 생성 실패
+# 해결: 리소스 제한 조정
+--set resources.requests.memory=256Mi
+--set resources.limits.memory=1Gi
 ```
