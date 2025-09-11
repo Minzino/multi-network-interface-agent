@@ -22,7 +22,7 @@ type NetworkInterface struct {
 	interfaceName *InterfaceName
 }
 
-// NewNetworkInterface creates a new NetworkInterface with validation
+// NewNetworkInterface creates a new NetworkInterface with validatio
 func NewNetworkInterface(id int, macAddr, nodeNameStr, ipAddr, cidrStr string, mtuValue int) (*NetworkInterface, error) {
 	// Validate and create value objects
 	interfaceIndex, err := NewInterfaceIndex(id)
@@ -62,7 +62,7 @@ func NewNetworkInterface(id int, macAddr, nodeNameStr, ipAddr, cidrStr string, m
 
 	// Validate business rules
 	if !cidr.Contains(ipAddress) {
-		return nil, domainErrors.NewValidationErrorWithCode("VAL015", 
+		return nil, domainErrors.NewValidationErrorWithCode("VAL015",
 			fmt.Sprintf("IP address %s is not within CIDR %s", ipAddr, cidrStr), nil)
 	}
 
@@ -182,18 +182,18 @@ func NewInterfaceName(name string) (*InterfaceName, error) {
 
 	matches := interfaceNamePattern.FindStringSubmatch(name)
 	if len(matches) != 2 {
-		return nil, domainErrors.NewValidationErrorWithCode("VAL017", 
+		return nil, domainErrors.NewValidationErrorWithCode("VAL017",
 			fmt.Sprintf("invalid interface name format: %s (expected: %s<number>)", name, constants.InterfacePrefix), nil)
 	}
 
 	index, err := strconv.Atoi(matches[1])
 	if err != nil {
-		return nil, domainErrors.NewValidationErrorWithCode("VAL018", 
+		return nil, domainErrors.NewValidationErrorWithCode("VAL018",
 			fmt.Sprintf("invalid interface index in name: %s", name), err)
 	}
 
 	if index < 0 || index >= constants.MaxInterfaces {
-		return nil, domainErrors.NewValidationErrorWithCode("VAL019", 
+		return nil, domainErrors.NewValidationErrorWithCode("VAL019",
 			fmt.Sprintf("interface index out of range: %d (0-%d)", index, constants.MaxInterfaces-1), nil)
 	}
 
@@ -228,7 +228,7 @@ var (
 	ErrInvalidNodeName      = errors.New("invalid node name")
 )
 
-// Validate verifies the validity of NetworkInterface  
+// Validate verifies the validity of NetworkInterface
 func (ni *NetworkInterface) Validate() error {
 	if !isValidMacAddress(ni.MacAddress()) {
 		return ErrInvalidMacAddress

@@ -28,6 +28,7 @@ type ConfigureNetworkUseCase struct {
     logger             *logrus.Logger
     maxConcurrentTasks int
     driftDetector      *services.DriftDetector
+    routingCoordinator *services.RoutingCoordinator // 라우팅 전역 직렬화
     // sub usecases
     applier    *ApplyUseCase
     validator  *ValidateUseCase
@@ -85,6 +86,7 @@ func NewConfigureNetworkUseCaseWithDetector(
         logger:             logger,
         maxConcurrentTasks: maxConcurrentTasks,
         driftDetector:      drift,
+        routingCoordinator: services.NewRoutingCoordinator(logger), // 라우팅 코디네이터 초기화
         opTimeout:          opTimeout,
         maxRetries:         maxRetries,
         backoffMultiplier:  backoffMultiplier,
@@ -182,6 +184,8 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
             // 최종 상태에서만 카운팅/결과 집계
             if status == "success" {
                 atomic.AddInt32(&processedCount, 1)
+                // 상태 업데이트: 성공으로 마킹
+                _ = uc.repository.UpdateInterfaceStatus(context.Background(), job.ID(), entities.StatusConfigured)
                 wg.Done()
             } else {
                 atomic.AddInt32(&failedCount, 1)

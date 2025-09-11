@@ -156,6 +156,30 @@ var (
 		},
 		[]string{"version", "os_type", "node_name"},
 	)
+
+	// 라우팅 직렬화 메트릭 (Phase 2)
+	RoutingLockWaitDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "multinic_routing_lock_wait_duration_seconds",
+			Help:    "Time spent waiting for routing lock",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	RoutingOperationDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "multinic_routing_operation_duration_seconds",
+			Help:    "Time spent executing routing operations",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	RoutingOperationFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "multinic_routing_operation_failures_total",
+			Help: "Total number of routing operation failures",
+		},
+	)
 )
 
 // RecordInterfaceProcessing은 인터페이스 처리 시간을 기록합니다
@@ -231,4 +255,19 @@ func SetDBConnectionStatus(connected bool) {
 // SetAgentInfo는 에이전트 정보를 설정합니다
 func SetAgentInfo(version, osType, nodeName string) {
 	AgentInfo.WithLabelValues(version, osType, nodeName).Set(1)
+}
+
+// ObserveRoutingLockWaitDuration는 라우팅 락 대기 시간을 기록합니다
+func ObserveRoutingLockWaitDuration(duration float64) {
+	RoutingLockWaitDuration.Observe(duration)
+}
+
+// ObserveRoutingOperationDuration는 라우팅 작업 실행 시간을 기록합니다
+func ObserveRoutingOperationDuration(duration float64) {
+	RoutingOperationDuration.Observe(duration)
+}
+
+// IncRoutingOperationFailures는 라우팅 작업 실패 카운터를 증가시킵니다
+func IncRoutingOperationFailures() {
+	RoutingOperationFailures.Inc()
 }

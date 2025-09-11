@@ -68,11 +68,9 @@ func (s *stubExec) ExecuteWithTimeout(ctx context.Context, _ time.Duration, cmd 
         if len(args) >= 3 && args[0] == "-o" && args[1] == "link" && args[2] == "show" {
             out := ""
             for i, mac := range s.macs {
-                if i == 0 {
-                    out += fmt.Sprintf("2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000\\    link/ether %s brd ff:ff:ff:ff:ff:ff", mac)
-                } else {
-                    out += fmt.Sprintf("\n%d: multinic%d: <BROADCAST,MULTICAST> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000\\    link/ether %s brd ff:ff:ff:ff:ff:ff", i+2, i-1, mac)
-                }
+                // After configuration, all interfaces should be renamed to multinic* and be UP
+                if i > 0 { out += "\n" }
+                out += fmt.Sprintf("%d: multinic%d: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\\    link/ether %s brd ff:ff:ff:ff:ff:ff", i+2, i, mac)
             }
             return []byte(out), nil
         }

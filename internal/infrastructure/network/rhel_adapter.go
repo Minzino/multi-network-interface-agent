@@ -18,10 +18,11 @@ import (
 
 // RHELAdapter configures network for RHEL-based OS using direct file modification.
 type RHELAdapter struct {
-	commandExecutor interfaces.CommandExecutor
-	fileSystem      interfaces.FileSystem
-	logger          *logrus.Logger
-	isContainer     bool // indicates if running in container
+	commandExecutor        interfaces.CommandExecutor
+	fileSystem             interfaces.FileSystem
+	logger                 *logrus.Logger
+	isContainer            bool // indicates if running in container
+	enableSELinuxRestore   bool // whether to run restorecon on created files
 }
 
 // NewRHELAdapter creates a new RHELAdapter.
@@ -30,6 +31,16 @@ func NewRHELAdapter(
 	fileSystem interfaces.FileSystem,
 	logger *logrus.Logger,
 ) *RHELAdapter {
+	return NewRHELAdapterWithSELinux(executor, fileSystem, logger, false)
+}
+
+// NewRHELAdapterWithSELinux creates a new RHELAdapter with SELinux restore option.
+func NewRHELAdapterWithSELinux(
+	executor interfaces.CommandExecutor,
+	fileSystem interfaces.FileSystem,
+	logger *logrus.Logger,
+	enableSELinuxRestore bool,
+) *RHELAdapter {
 	// Check if running in container by checking if /host exists
 	isContainer := false
 	if _, err := executor.ExecuteWithTimeout(context.Background(), 1*time.Second, "test", "-d", "/host"); err == nil {
@@ -37,10 +48,11 @@ func NewRHELAdapter(
 	}
 
 	return &RHELAdapter{
-		commandExecutor: executor,
-		fileSystem:      fileSystem,
-		logger:          logger,
-		isContainer:     isContainer,
+		commandExecutor:      executor,
+		fileSystem:           fileSystem,
+		logger:               logger,
+		isContainer:          isContainer,
+		enableSELinuxRestore: enableSELinuxRestore,
 	}
 }
 
@@ -120,6 +132,10 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
     nmContent := a.generateNMConnection(iface, ifaceName)
     if err := a.fileSystem.WriteFile(nmPath, []byte(nmContent), 0600); err != nil { return errors.NewSystemError("failed to write .nmconnection", err) }
     a.logger.WithFields(logrus.Fields{"link": linkPath, "nmconnection": nmPath}).Info("RHEL persist files written (no immediate reload)")
+    
+    // 5. Optional SELinux context restoration
+    a.restoreSELinuxContext(ctx)
+    
     return nil
 }
 
@@ -243,4 +259,45 @@ func extractIndexRHEL(name string) int {
         if n, err := strconv.Atoi(idx); err == nil { return n }
     }
     return 0
+}
+
+// restoreSELinuxContext runs restorecon on network configuration directories if enabled
+func (a *RHELAdapter) restoreSELinuxContext(ctx context.Context) {
+    if !a.enableSELinuxRestore {
+        return
+    }
+
+    dirs := []string{
+        constants.NetworkManagerDir,     // /etc/NetworkManager/system-connections
+        constants.SystemdNetworkDir,     // /etc/systemd/network
+    }
+
+    for _, dir := range dirs {
+        if !a.fileSystem.Exists(dir) {
+            continue
+        }
+
+        a.logger.WithField("directory", dir).Debug("Running SELinux context restoration")
+        
+        var cmdPath string
+        if a.isContainer {
+            cmdPath = fmt.Sprintf("nsenter --target 1 --mount --uts --ipc --net --pid restorecon -Rv %s", dir)
+        } else {
+            cmdPath = fmt.Sprintf("restorecon -Rv %s", dir)
+        }
+
+        output, err := a.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "sh", "-c", cmdPath)
+        if err != nil {
+            a.logger.WithFields(logrus.Fields{
+                "directory": dir,
+                "error":     err.Error(),
+                "output":    string(output),
+            }).Warn("SELinux context restoration failed (ignoring)")
+        } else {
+            a.logger.WithFields(logrus.Fields{
+                "directory": dir,
+                "output":    strings.TrimSpace(string(output)),
+            }).Info("SELinux context restoration completed")
+        }
+    }
 }

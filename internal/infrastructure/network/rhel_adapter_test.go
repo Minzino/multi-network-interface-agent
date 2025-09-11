@@ -591,3 +591,171 @@ func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
 		})
 	}
 }
+
+// TestRHELAdapter_SELinuxRestore tests SELinux context restoration functionality
+func TestRHELAdapter_SELinuxRestore(t *testing.T) {
+	tests := []struct {
+		name             string
+		enableSELinux    bool
+		isContainer      bool
+		setupMocks       func(*MockCommandExecutor, *MockFileSystem)
+		expectRestorecon bool
+	}{
+		{
+			name:          "SELinux disabled - no restorecon",
+			enableSELinux: false,
+			isContainer:   false,
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check during adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
+				// No restorecon calls expected
+			},
+			expectRestorecon: false,
+		},
+		{
+			name:          "SELinux enabled - native restorecon",
+			enableSELinux: true,
+			isContainer:   false,
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check during adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Directory existence checks
+				fs.On("Exists", "/etc/NetworkManager/system-connections").Return(true)
+				fs.On("Exists", "/etc/systemd/network").Return(true)
+				
+				// Expect native restorecon calls
+				m.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+					"restorecon -Rv /etc/NetworkManager/system-connections").
+					Return([]byte("restorecon: /etc/NetworkManager/system-connections context"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+					"restorecon -Rv /etc/systemd/network").
+					Return([]byte("restorecon: /etc/systemd/network context"), nil).Once()
+			},
+			expectRestorecon: true,
+		},
+		{
+			name:          "SELinux enabled - container nsenter restorecon",
+			enableSELinux: true,
+			isContainer:   true,
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check during adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), nil).Once()
+				
+				// Directory existence checks
+				fs.On("Exists", "/etc/NetworkManager/system-connections").Return(true)
+				fs.On("Exists", "/etc/systemd/network").Return(true)
+				
+				// Expect nsenter-based restorecon calls
+				m.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+					"nsenter --target 1 --mount --uts --ipc --net --pid restorecon -Rv /etc/NetworkManager/system-connections").
+					Return([]byte("restorecon: /etc/NetworkManager/system-connections context"), nil).Once()
+				m.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+					"nsenter --target 1 --mount --uts --ipc --net --pid restorecon -Rv /etc/systemd/network").
+					Return([]byte("restorecon: /etc/systemd/network context"), nil).Once()
+			},
+			expectRestorecon: true,
+		},
+		{
+			name:          "SELinux enabled - restorecon failure (should continue)",
+			enableSELinux: true,
+			isContainer:   false,
+			setupMocks: func(m *MockCommandExecutor, fs *MockFileSystem) {
+				// Container check during adapter initialization
+				m.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+					Return([]byte(""), errors.New("not found")).Once()
+				
+				// Directory existence checks
+				fs.On("Exists", "/etc/NetworkManager/system-connections").Return(true)
+				fs.On("Exists", "/etc/systemd/network").Return(false) // Only one dir exists
+				
+				// Expect one restorecon call that fails
+				m.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+					"restorecon -Rv /etc/NetworkManager/system-connections").
+					Return([]byte(""), errors.New("restorecon command not found")).Once()
+			},
+			expectRestorecon: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockExecutor := new(MockCommandExecutor)
+			mockFS := new(MockFileSystem)
+			
+			tt.setupMocks(mockExecutor, mockFS)
+			
+			// Create adapter with SELinux option
+			adapter := NewRHELAdapterWithSELinux(mockExecutor, mockFS, logrus.New(), tt.enableSELinux)
+			
+			// Test the restoreSELinuxContext method directly
+			ctx := context.Background()
+			adapter.restoreSELinuxContext(ctx) // This should not panic or error
+
+			mockExecutor.AssertExpectations(t)
+			mockFS.AssertExpectations(t)
+		})
+	}
+}
+
+// TestRHELAdapter_Configure_WithSELinux tests full Configure flow with SELinux integration
+func TestRHELAdapter_Configure_WithSELinux(t *testing.T) {
+	// Create test interface
+	iface, _ := entities.NewNetworkInterface(0, "fa:16:3e:bb:93:7a", "test-node", "192.168.1.100", "192.168.1.0/24", 1450)
+	ifaceName := mustCreateInterfaceName("multinic0")
+	
+	mockExecutor := new(MockCommandExecutor)
+	mockFS := new(MockFileSystem)
+	
+	// Container check during adapter initialization
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
+		Return([]byte(""), errors.New("not found")).Once()
+	
+	// findDeviceByMAC mock (ip link show)
+	ipLinkOutput := `1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether fa:16:3e:bb:93:7a brd ff:ff:ff:ff:ff:ff`
+	
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "show").
+		Return([]byte(ipLinkOutput), nil).Once()
+	
+	// Runtime commands (ip link set name, mtu, addr, up)
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "eth0", "name", "multinic0").
+		Return([]byte(""), nil).Once()
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "mtu", "1450").
+		Return([]byte(""), nil).Once()
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "addr", "replace", "192.168.1.100/24", "dev", "multinic0").
+		Return([]byte(""), nil).Once()
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 30*time.Second, "ip", "link", "set", "multinic0", "up").
+		Return([]byte(""), nil).Once()
+	
+	// File writes
+	mockFS.On("WriteFile", "/etc/systemd/network/90-multinic0.link", mock.AnythingOfType("[]uint8"), os.FileMode(0644)).
+		Return(nil).Once()
+	mockFS.On("WriteFile", "/etc/NetworkManager/system-connections/90-multinic0.nmconnection", mock.AnythingOfType("[]uint8"), os.FileMode(0600)).
+		Return(nil).Once()
+	
+	// SELinux restorecon (enabled)
+	mockFS.On("Exists", "/etc/NetworkManager/system-connections").Return(true)
+	mockFS.On("Exists", "/etc/systemd/network").Return(true)
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+		"restorecon -Rv /etc/NetworkManager/system-connections").
+		Return([]byte("restorecon: context restored"), nil).Once()
+	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 10*time.Second, "sh", "-c", 
+		"restorecon -Rv /etc/systemd/network").
+		Return([]byte("restorecon: context restored"), nil).Once()
+	
+	// Create adapter with SELinux enabled
+	adapter := NewRHELAdapterWithSELinux(mockExecutor, mockFS, logrus.New(), true)
+	
+	// Test Configure
+	err := adapter.Configure(context.Background(), *iface, ifaceName)
+	assert.NoError(t, err)
+	
+	mockExecutor.AssertExpectations(t)
+	mockFS.AssertExpectations(t)
+}

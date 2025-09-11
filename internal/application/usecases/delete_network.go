@@ -30,12 +30,13 @@ type DeleteNetworkOutput struct {
 
 // DeleteNetworkUseCase는 고아 인터페이스를 감지하고 삭제하는 유스케이스입니다
 type DeleteNetworkUseCase struct {
-	osDetector    interfaces.OSDetector
-	rollbacker    interfaces.NetworkRollbacker
-	namingService *services.InterfaceNamingService
-	repository    interfaces.NetworkInterfaceRepository
-	fileSystem    interfaces.FileSystem
-	logger        *logrus.Logger
+	osDetector         interfaces.OSDetector
+	rollbacker         interfaces.NetworkRollbacker
+	namingService      *services.InterfaceNamingService
+	repository         interfaces.NetworkInterfaceRepository
+	fileSystem         interfaces.FileSystem
+	logger             *logrus.Logger
+	routingCoordinator *services.RoutingCoordinator // 라우팅 전역 직렬화
 }
 
 // NewDeleteNetworkUseCase는 새로운 DeleteNetworkUseCase를 생성합니다
@@ -48,12 +49,13 @@ func NewDeleteNetworkUseCase(
 	logger *logrus.Logger,
 ) *DeleteNetworkUseCase {
 	return &DeleteNetworkUseCase{
-		osDetector:    osDetector,
-		rollbacker:    rollbacker,
-		namingService: namingService,
-		repository:    repository,
-		fileSystem:    fileSystem,
-		logger:        logger,
+		osDetector:         osDetector,
+		rollbacker:         rollbacker,
+		namingService:      namingService,
+		repository:         repository,
+		fileSystem:         fileSystem,
+		logger:             logger,
+		routingCoordinator: services.NewRoutingCoordinator(logger), // 라우팅 코디네이터 초기화
 	}
 }
 

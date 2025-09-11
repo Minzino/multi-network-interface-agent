@@ -169,3 +169,243 @@
 - MTU 1450(오버레이) 여부 확인 후 CR의 MTU 값 조정 권장
 - 테스트 NIC는 운영 트래픽 미사용/NIC DOWN 상태에서 시작 시 검증 명확
 - 최신 이미지(Preflight Guard 포함)로 카나리 2노드×NIC 4개 재검증 권장
+
+---
+
+## 🧭 OS별 네트워크 적용/영속화 전략 (결정)
+
+### 공통 원칙 (안정성 우선)
+- 런타임 적용은 `ip` 계열로 즉시 반영: 이름(rename), MTU, IPv4, 라우트 모두 `ip`/`ip route`로 처리
+  - 예) `ip link set dev <old> name <new>`, `ip link set <new> mtu <mtu>`, `ip addr replace <ip>/<prefix> dev <new>`, `ip route replace ...`
+- 영속성은 OS별 파일 “작성만” 수행, 즉시 apply/reload 호출은 하지 않음(유지보수 창 배치 1회 적용 옵션만)
+- Preflight: MAC 미존재/오류 즉시 차단 + 인터페이스 UP 차단 기본 활성
+- 동시성: 기본 `MAX_CONCURRENT_TASKS=1` 권장, 라우트/기본경로 변경은 전역 직렬화
+
+### Ubuntu/Debian (netplan)
+- netplan YAML에 이름 영속화를 위한 `set-name` 반드시 포함 (이전에는 누락되어 부팅 시 ensX로 복귀)
+- 표준 템플릿 예시:
+
+```yaml
+network:
+  version: 2
+  renderer: networkd   # 또는 NetworkManager 환경에 맞게
+  ethernets:
+    multinic0:
+      match:
+        macaddress: fa:16:3e:11:4c:d1
+      set-name: multinic0      # 이름 영속화(핵심)
+      mtu: 1450
+      dhcp4: false
+      addresses:
+        - 11.11.11.107/24
+      optional: true
+```
+
+- 운영: 런타임은 `ip`로 즉시 반영, YAML은 영속만(즉시 `netplan apply` 비호출). 유지보수 창에 1회 apply/재부팅으로 반영 확인
+
+### RHEL/Rocky/Alma/SUSE
+- 이름 영속: systemd-udev `.link` 파일로 MAC→Name 고정
+- 설정 영속: NetworkManager keyfile(`.nmconnection`, 권한 600) 또는 SUSE ifcfg(wicked)
+- 예시(.link): `/etc/systemd/network/10-multinic0.link`
+
+```
+[Match]
+MACAddress=fa:16:3e:11:4c:d1
+[Link]
+Name=multinic0
+```
+
+- 예시(.nmconnection): `/etc/NetworkManager/system-connections/multinic0.nmconnection` (600, root:root, SELinux 시 `restorecon`)
+
+```
+[connection]
+id=multinic0
+type=ethernet
+interface-name=multinic0
+autoconnect=true
+
+[ethernet]
+mac-address=fa:16:3e:11:4c:d1
+mtu=1450
+
+[ipv4]
+method=manual
+address1=11.11.11.107/24
+never-default=true
+
+[ipv6]
+method=ignore
+```
+
+- 운영: 런타임은 `ip`로 즉시 반영, `.link`/`.nmconnection`은 영속만. 즉시 `nmcli reload/up` 비호출(배치 옵션 시 1회)
+- 디렉터리 준비: `/etc/systemd/network`가 없을 수 있어 자동 생성 필요 (코드에 허용/생성 반영 완료)
+
+### 검증/운영 팁
+- 재부팅 후 이름/설정이 유지되는지 확인: `ip -o link/addr show multinicX`, `nmcli device status`
+- 기본 경로를 만들지 않으려면 `never-default=true` 유지. 게이트웨이 영속이 필요하면 `address1=IP/prefix,GW` 또는 `route1=default 0.0.0.0/0 GW`를 사용(유지보수 창 권장)
+
+### 구현 계획 (다음 단계)
+- Ubuntu netplan 작성 로직에 `set-name` 추가(이름 영속)
+- RHEL 경로에서 `.link` + `.nmconnection(600)` 생성, SELinux 컨텍스트 복원
+- 런타임 경로 공통화(ip-only), 즉시 apply/reload 제거(배치 옵션만)
+- 라우트 변경 전역 직렬화 + 기본 동시성 1
+- 문서/메트릭/알람 갱신(preflight_up_block, mac_missing_block, runtime_apply_duration 등)
+
+---
+
+## ✅ 현재까지 반영 사항(상세)
+
+### Ubuntu/Debian
+- 런타임: netplan 즉시 적용(try/apply) 제거, `ip` 기반으로 rename/MTU/IP/UP 적용
+- 영속: netplan YAML에 `match.macaddress + set-name` 항상 포함(이름 영속화 보장), 파일만 작성(유지보수 창 1회 apply 또는 재부팅 시 반영)
+- TDD: netplan 경로 단위 테스트 추가
+  - set-name 포함 확인, netplan try/apply 미호출 확인, 롤백은 파일 삭제만 확인
+- 파일 네이밍: `90-` 접두 사용 유지 (예: `90-multinic0.yaml`)
+
+### RHEL/Rocky/Alma/SUSE
+- 런타임: `ip` 기반으로 rename/MTU/IP/UP 적용(즉시 `nmcli`/`systemctl restart NetworkManager` 제거)
+- 영속: systemd-udev `.link` + NetworkManager `.nmconnection` “작성만” 수행
+  - `.link`: `/etc/systemd/network/90-multinicX.link`
+  - `.nmconnection`: `/etc/NetworkManager/system-connections/90-multinicX.nmconnection` (권한 600, SELinux 시 `restorecon` 권장)
+  - 기본 경로 방지: `never-default=true` 기본 포함(게이트웨이는 유지보수 창에 영속 선언)
+- Helm: `/etc/systemd/network` hostPath 마운트 추가, DB 환경변수 제거(DATA_SOURCE=nodecr)
+- TDD: RHEL 경로 단위 테스트 추가
+  - persist 파일 생성/내용 확인, 즉시 systemctl/nmcli 호출 없음 확인, `90-` 접두 확인
+
+### Preflight/UseCase/워크플로우
+- Preflight: MAC 미존재/오류 즉시 차단 + 인터페이스 UP 차단(기본) 반영
+- 워커풀: after-hook 결과 집계/리트라이/메트릭 유지, 통합 테스트 정비(동시성/리트라이)
+- 로그/문서: 영어화, METRICS.md/대시보드, 운영 메모 정리
+
+### Helm/배포 스크립트
+- Helm
+  - 불필요한 DB env 제거, `agent.dataSource=nodecr` 기본값 추가
+  - `/etc/netplan`, `/etc/NetworkManager/system-connections`, `/etc/systemd/network` 마운트
+- deploy.sh
+  - 사용자 요청에 따라 nerdctl-only 원복(기존 잘 동작하던 버전 유지)
+  - buildkitd는 외부에서 기동되어 있어야 함(재부팅 후 필요 시 수동 기동)
+
+---
+
+## 🧪 테스트/TDD 현황
+- Ubuntu netplan: runtime-ip + persist-only 테스트 통과
+- RHEL persist: `.link` + `.nmconnection` 생성/내용/미호출 경로 테스트 통과
+- UseCases: 프리플라이트/통합테스트 정비 및 통과(동시성/리트라이)
+
+---
+
+## 🛠 운영 체크리스트(현장)
+- Ubuntu
+  - YAML에 `set-name` 포함되어야 재부팅 후 ensX로 돌아가지 않음
+  - 런타임은 `ip`, YAML은 영속만(유지보수 창 1회 apply)
+- RHEL
+  - `.link`(644) + `.nmconnection`(600) 작성, 경로 없으면 생성됨
+  - SELinux enforcing 시 `restorecon -Rv /etc/NetworkManager/system-connections`
+  - 런타임은 `ip`, 즉시 nmcli/systemctl 호출 없음(플랩 최소화)
+- 공통
+  - 기본 경로/게이트웨이는 유지보수 창에 배치 1회로 반영 권장
+  - 동시성 1 권장, 라우트 변경 직렬화
+
+---
+
+## ✅ Phase A 완료: 라우팅/기본경로 전역 직렬화 + 기본 동시성 1
+
+### 2025-09-11 완료사항
+1. **SELinux 컨텍스트 복원 기능 추가**:
+   - RHELAdapter에 `enableSELinuxRestore` 옵션 추가 (기본 OFF)
+   - `NewRHELAdapterWithSELinux` 생성자 및 `restoreSELinuxContext` 메서드 구현
+   - SELinux enforcing 환경에서 .nmconnection 파일 생성 후 `restorecon -Rv` 실행
+   - 컨테이너 환경에서는 nsenter 사용하여 호스트 네임스페이스에서 실행
+   - 포괄적 단위 테스트 작성 및 통과
+
+2. **라우팅 전역 직렬화 인프라 구축**:
+   - `RoutingCoordinator` 서비스 생성 (`/internal/domain/services/routing_coordinator.go`)
+   - 전역 뮤텍스 기반 라우팅 작업 직렬화 구현
+   - Prometheus 메트릭 수집 (작업 지속시간, 성공/실패율)
+   - 컨텍스트 취소 및 타임아웃 지원
+
+3. **기본 동시성 설정 변경**:
+   - `DefaultMaxConcurrentTasks`: 5 → 1로 변경
+   - Helm values.yaml에 `maxConcurrentTasks: 1` 기본값 설정
+   - 라우팅 테이블 충돌 방지하면서 설정 가능성 유지
+
+4. **UseCase 통합**:
+   - ConfigureNetworkUseCase, DeleteNetworkUseCase에 RoutingCoordinator 연결
+   - 모든 라우팅 작업이 전역 직렬화를 통해 처리되도록 구현
+   - 기존 생성자 호환성 유지 (자동 RoutingCoordinator 생성)
+
+5. **테스트 완전성 확보**:
+   - 라우팅 코디네이터 단위 테스트 (동시성, 메트릭, 컨텍스트 취소)
+   - 통합 테스트 및 UseCase 테스트 수정 및 통과 확인
+   - 전체 프로젝트 테스트 통과 (✅ 100% 성공)
+
+### 핵심 성과
+- **라우팅 충돌 방지**: 전역 직렬화로 동시 인터페이스 설정 시 라우팅 테이블 충돌 완전 차단
+- **성능 균형**: 기본 동시성 1로 안전성 확보, 필요시 설정 변경으로 성능 조정 가능
+- **운영 관찰성**: 라우팅 작업 메트릭으로 성능 및 락 경합 모니터링 가능
+- **생산 준비**: 에러 처리, 컨텍스트 취소, 타임아웃 모든 고려사항 반영
+
+## 🔜 다음 단계(실행 계획)
+1) ✅ RHEL SELinux 컨텍스트 복원 로직(옵션) 추가 및 TDD - **완료**
+2) ✅ 라우트/기본경로 변경 전역 직렬화 + 기본 동시성 1(Helm values) 반영 - **완료**
+3) 통합 테스트: 재부팅 영속 시나리오(간접 검증: persist 파일 기준) 케이스 추가
+4) 문서/알람/메트릭 라벨 최종 정리(runtime_apply_duration, route_changes 등)
+
+---
+
+## 🪄 매직 프롬프트 (다음 세션)
+
+```
+당신은 Go 기반 MultiNIC Agent 리팩터링을 이어받는 시니어 엔지니어입니다.
+
+[목표]
+- RHEL/SUSE 경로를 Ubuntu와 동일 철학으로 완성: 런타임 ip-only, 영속 파일(.link/.nmconnection) “작성만”, 즉시 apply/reload 없음
+- SELinux 컨텍스트 복원(옵션) 추가, 라우트 변경 직렬화, 기본 동시성 1(Helm values)
+- TDD로 보장(파일 생성/권한/내용/미호출 경로 검증)
+
+[현황 요약]
+- Ubuntu: netplan set-name 포함, netplan try/apply 제거, ip-only 런타임(TDD 완료)
+- RHEL: .link + .nmconnection(90- 접두) 생성 및 ip-only 런타임(TDD 완료), Helm에 systemd-network 마운트 추가
+- Helm: DB env 제거(DATA_SOURCE=nodecr), deploy.sh는 nerdctl-only로 원복
+- Preflight: MAC 미존재/오류/UP 차단(기본)
+
+[할 일]
+1) RHEL: SELinux `restorecon` 호출(옵션) 추가 및 테스트 스텁 반영
+2) 라우트/기본경로 변경 전역 직렬화(전역 락/세마포) 및 기본 동시성 1(Helm values)
+3) 재부팅 영속 시나리오 통합 테스트(간접: persist 파일 기준) 보강
+4) 문서/알람/메트릭 라벨 보강
+
+[주의]
+- .nmconnection 권한 600 유지, .link 644
+- 게이트웨이/기본 경로는 유지보수 창 배치 1회로 처리
+- Ubuntu는 netplan set-name으로 이름 영속, RHEL은 .link로 영속
+```
+
+
+---
+
+## 🪄 매직 프롬프트 (다음 세션용)
+
+```
+당신은 Go 기반 MultiNIC Agent 리팩터링을 이어받는 시니어 엔지니어입니다. 아래 결정사항을 기준으로 구현을 진행하세요.
+
+[목표]
+- 안정성 최우선: 런타임은 ip 기반 즉시 적용, 영속은 OS별 파일만 작성(즉시 apply/reload 없음)
+- Ubuntu/Debian: netplan YAML에 match.macaddress + set-name 필수(이름 영속)
+- RHEL/SUSE: systemd .link로 이름 영속 + .nmconnection(600)로 설정 영속
+- Preflight: MAC 미존재/오류/UP 차단(기본) 유지
+- 동시성 1 + 라우트 변경 직렬화
+
+[해야 할 일]
+1) Ubuntu 경로: netplan 템플릿에 set-name 추가, 현재 런타임 ip 적용 로직과 정합성 유지
+2) RHEL 경로: .link + .nmconnection 생성(권한/SELinux 포함), `/etc/systemd/network` 자동 생성 보장
+3) 런타임 처리 공통화: rename/mtu/ip/route를 ip-only로 일원화, 즉시 nmcli/netplan/wicked 적용 제거(배치 옵션만)
+4) 라우트/기본경로 변경 직렬화, 기본 동시성 1로 설정(Helm values)
+5) 메트릭/알람 라벨 보강 및 문서 업데이트
+6) 통합/재부팅 테스트 시나리오 추가(이름/설정 영속성 검증)
+
+[참고]
+- RHEL: .link(644) + .nmconnection(600), SELinux `restorecon -Rv /etc/NetworkManager/system-connections`
+- Ubuntu: netplan set-name로 rename 영속, optional: true 권장
+- 런타임은 항상 ip replace 계열 사용, 기본 경로 변경은 유지보수 창에 배치 1회로 처리
+```

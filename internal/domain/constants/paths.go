@@ -42,7 +42,7 @@ const (
 
 	// 재시도 설정
 	DefaultMaxRetries        = 3
-	DefaultMaxConcurrentTasks = 5
+	DefaultMaxConcurrentTasks = 1  // 라우팅 충돌 방지를 위한 기본 직렬화
 	DefaultBackoffMultiplier  = 2.0
 
 	// 네임스페이스

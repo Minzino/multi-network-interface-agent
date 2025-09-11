@@ -11,6 +11,8 @@ agent:
   nodeCRNamespace: "multinic-system"
   # Prometheus metrics/health 포트
   metricsPort: "8080"
+  # 최대 동시 처리 인터페이스 수 (라우팅 충돌 방지를 위해 기본값 1)
+  maxConcurrentTasks: 1
 
 # 리소스 제한
 resources:
