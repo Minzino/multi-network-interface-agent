@@ -189,7 +189,6 @@ func (c *Container) initializeUseCases() error {
         c.config.Agent.CommandTimeout,
         c.config.Agent.MaxRetries,
         c.config.Agent.Backoff.Multiplier,
-        c.config.Agent.PreflightBlockIfUP,
     )
 
 	// 네트워크 삭제 유스케이스
