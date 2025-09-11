@@ -5,6 +5,8 @@ image:
 
 # 에이전트/CR 데이터 소스 설정 (Controller가 생성하는 Job에서 사용)
 agent:
+  # 데이터 소스: nodecr 고정(데이터베이스 미사용)
+  dataSource: "nodecr"
   # nodeCR 사용 시 조회할 네임스페이스
   nodeCRNamespace: "multinic-system"
   # Prometheus metrics/health 포트
