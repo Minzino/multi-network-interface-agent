@@ -515,8 +515,8 @@ func TestRHELAdapter_GetConfigDir(t *testing.T) {
 	mockExecutor.On("ExecuteWithTimeout", mock.Anything, 1*time.Second, "test", "-d", "/host").
 		Return([]byte(""), errors.New("not found")).Once()
 
-	adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
-	assert.Equal(t, "/etc/sysconfig/network-scripts", adapter.GetConfigDir())
+    adapter := NewRHELAdapter(mockExecutor, &MockFileSystem{}, logrus.New())
+    assert.Equal(t, "/etc/NetworkManager/system-connections", adapter.GetConfigDir())
 }
 
 func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
@@ -574,8 +574,8 @@ func TestRHELAdapter_generateIfcfgContent(t *testing.T) {
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "test", "-d", "/host").
 				Return([]byte{}, assert.AnError).Maybe()
 
-			adapter := NewRHELAdapter(mockExecutor, mockFS, logger)
-			content := adapter.generateIfcfgContent(tt.iface, tt.ifaceName)
+            adapter := NewRHELAdapter(mockExecutor, mockFS, logger)
+            content := adapter.generateNMConnection(tt.iface, tt.ifaceName)
 
 			// Verify all expected fields are present
 			for _, field := range tt.expectedFields {

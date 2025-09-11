@@ -1,15 +1,17 @@
 package network
 
 import (
-	"context"
-	"fmt"
-	"path/filepath"
-	"strings"
-	"time"
+    "context"
+    "fmt"
+    "path/filepath"
+    "strings"
+    "time"
 
-	"multinic-agent/internal/domain/entities"
-	"multinic-agent/internal/domain/errors"
-	"multinic-agent/internal/domain/interfaces"
+    "strconv"
+    "multinic-agent/internal/domain/constants"
+    "multinic-agent/internal/domain/entities"
+    "multinic-agent/internal/domain/errors"
+    "multinic-agent/internal/domain/interfaces"
 
 	"github.com/sirupsen/logrus"
 )
@@ -44,10 +46,7 @@ func NewRHELAdapter(
 
 // GetConfigDir returns the directory path where configuration files are stored
 // RHEL uses traditional network-scripts directory for interface configuration
-func (a *RHELAdapter) GetConfigDir() string {
-	// RHEL uses /etc/sysconfig/network-scripts/ for ifcfg files
-	return "/etc/sysconfig/network-scripts"
-}
+func (a *RHELAdapter) GetConfigDir() string { return constants.NetworkManagerDir }
 
 // execCommand is a helper method to execute commands with nsenter if in container
 func (a *RHELAdapter) execCommand(ctx context.Context, command string, args ...string) ([]byte, error) {
@@ -83,75 +82,45 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 		"mac":           macAddress,
 	}).Debug("Found actual device for MAC address")
 
-	// 2. Check if device name needs to be changed
-	if actualDevice != ifaceName {
+    // 2. Check if device name needs to be changed
+    if actualDevice != ifaceName {
 		a.logger.WithFields(logrus.Fields{
 			"from": actualDevice,
 			"to":   ifaceName,
 		}).Info("Renaming network interface")
 
-		// Bring interface down
-		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "down"); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("Failed to bring down interface %s", actualDevice), err)
-		}
-
-		// Rename interface
-		if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err != nil {
-			// Try to bring it back up if rename fails
-			if _, bringUpErr := a.execCommand(ctx, "ip", "link", "set", actualDevice, "up"); bringUpErr != nil {
-				a.logger.WithError(bringUpErr).Warn("Failed to bring interface back up after rename failure")
-			}
-			return errors.NewNetworkError(fmt.Sprintf("Failed to rename interface %s to %s", actualDevice, ifaceName), err)
-		}
-
-		// Bring interface up with new name
-		if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "up"); err != nil {
-			return errors.NewNetworkError(fmt.Sprintf("Failed to bring up interface %s", ifaceName), err)
-		}
+        // Try rename without down first; fallback to down
+        if _, err := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err != nil {
+            _, _ = a.execCommand(ctx, "ip", "link", "set", actualDevice, "down")
+            if _, err2 := a.execCommand(ctx, "ip", "link", "set", actualDevice, "name", ifaceName); err2 != nil {
+                return errors.NewNetworkError(fmt.Sprintf("Failed to rename interface %s to %s", actualDevice, ifaceName), err2)
+            }
+            _, _ = a.execCommand(ctx, "ip", "link", "set", ifaceName, "up")
+        }
 
 		a.logger.WithField("interface", ifaceName).Info("Interface renamed successfully")
 	}
 
-	// 3. Generate ifcfg file content
-	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
-	content := a.generateIfcfgContent(iface, ifaceName)
+    // 3. Runtime MTU/IP
+    if iface.MTU() > 0 { if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "mtu", fmt.Sprintf("%d", iface.MTU())); err != nil { return errors.NewNetworkError("Failed to set MTU", err) } }
+    if addr := strings.TrimSpace(iface.Address()); addr != "" && strings.TrimSpace(iface.CIDR()) != "" {
+        parts := strings.Split(iface.CIDR(), "/"); if len(parts) == 2 {
+            full := fmt.Sprintf("%s/%s", addr, parts[1])
+            if _, err := a.execCommand(ctx, "ip", "addr", "replace", full, "dev", ifaceName); err != nil { return errors.NewNetworkError("Failed to set IPv4", err) }
+        }
+    }
+    if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "up"); err != nil { return errors.NewNetworkError("Failed to set link up", err) }
 
-	a.logger.WithFields(logrus.Fields{
-		"interface":   ifaceName,
-		"config_path": configPath,
-    	"mac_address": iface.MacAddress(),
-	}).Info("About to write ifcfg file")
-
-	// Log the full content in debug mode for troubleshooting
-	a.logger.WithFields(logrus.Fields{
-		"interface": ifaceName,
-		"content":   content,
-	}).Debug("Full ifcfg file content")
-
-	// 4. Write the configuration file
-	if err := a.fileSystem.WriteFile(configPath, []byte(content), 0644); err != nil {
-		return errors.NewNetworkError(fmt.Sprintf("Failed to write ifcfg file: %s", configPath), err)
-	}
-
-	// Verify file was actually written
-	if !a.fileSystem.Exists(configPath) {
-		return errors.NewNetworkError(fmt.Sprintf("ifcfg file was not created: %s", configPath), nil)
-	}
-
-	a.logger.WithFields(logrus.Fields{
-		"interface":   ifaceName,
-		"config_path": configPath,
-	}).Info("ifcfg file written successfully")
-
-	// 5. Restart NetworkManager to apply changes
-	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
-		a.logger.WithError(err).Error("NetworkManager restart failed")
-		return errors.NewNetworkError("Failed to restart NetworkManager", err)
-	}
-
-	a.logger.WithField("interface", ifaceName).Info("NetworkManager restarted successfully")
-
-	return nil
+    // 4. Persist files: .link + .nmconnection with 9X prefix
+    idx := extractIndexRHEL(ifaceName)
+    linkPath := filepath.Join("/etc/systemd/network", fmt.Sprintf("9%d-%s.link", idx, ifaceName))
+    nmPath := filepath.Join(a.GetConfigDir(), fmt.Sprintf("9%d-%s.nmconnection", idx, ifaceName))
+    linkContent := fmt.Sprintf("[Match]\nMACAddress=%s\n[Link]\nName=%s\n", strings.ToLower(macAddress), ifaceName)
+    if err := a.fileSystem.WriteFile(linkPath, []byte(linkContent), 0644); err != nil { return errors.NewSystemError("failed to write .link", err) }
+    nmContent := a.generateNMConnection(iface, ifaceName)
+    if err := a.fileSystem.WriteFile(nmPath, []byte(nmContent), 0600); err != nil { return errors.NewSystemError("failed to write .nmconnection", err) }
+    a.logger.WithFields(logrus.Fields{"link": linkPath, "nmconnection": nmPath}).Info("RHEL persist files written (no immediate reload)")
+    return nil
 }
 
 // Validate verifies that the configured interface exists.
@@ -165,11 +134,13 @@ func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName)
 		return errors.NewNetworkError(fmt.Sprintf("Interface %s not found", ifaceName), err)
 	}
 
-	// Check if ifcfg file exists
-	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+ifaceName)
-	if !a.fileSystem.Exists(configPath) {
-		return errors.NewNetworkError(fmt.Sprintf("Configuration file %s not found", configPath), nil)
-	}
+    // Check if persist files exist
+    idx := extractIndexRHEL(ifaceName)
+    linkPath := filepath.Join("/etc/systemd/network", fmt.Sprintf("9%d-%s.link", idx, ifaceName))
+    nmPath := filepath.Join(a.GetConfigDir(), fmt.Sprintf("9%d-%s.nmconnection", idx, ifaceName))
+    if !a.fileSystem.Exists(linkPath) || !a.fileSystem.Exists(nmPath) {
+        return errors.NewNetworkError("persist files not found", nil)
+    }
 
 	a.logger.WithFields(logrus.Fields{
 		"interface": ifaceName,
@@ -183,20 +154,17 @@ func (a *RHELAdapter) Validate(ctx context.Context, name entities.InterfaceName)
 func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
 	a.logger.WithField("interface", name).Info("Starting RHEL interface rollback/deletion")
 
-	// 1. Delete the configuration file
-	configPath := filepath.Join(a.GetConfigDir(), "ifcfg-"+name)
-
-	if err := a.fileSystem.Remove(configPath); err != nil {
-		a.logger.WithError(err).WithField("interface", name).Debug("Error removing ifcfg file (can be ignored)")
-	}
-
-	// 2. Restart NetworkManager to apply the removal
-	if _, err := a.execCommand(ctx, "systemctl", "restart", "NetworkManager"); err != nil {
-		a.logger.WithError(err).Warn("NetworkManager restart failed during rollback")
-	}
-
-	a.logger.WithField("interface", name).Info("RHEL interface rollback/deletion completed")
-	return nil
+    idx := extractIndexRHEL(name)
+    linkPath := filepath.Join("/etc/systemd/network", fmt.Sprintf("9%d-%s.link", idx, name))
+    nmPath := filepath.Join(a.GetConfigDir(), fmt.Sprintf("9%d-%s.nmconnection", idx, name))
+    if err := a.fileSystem.Remove(linkPath); err != nil {
+        a.logger.WithError(err).WithField("link", linkPath).Debug("Error removing .link (ignored)")
+    }
+    if err := a.fileSystem.Remove(nmPath); err != nil {
+        a.logger.WithError(err).WithField("nm", nmPath).Debug("Error removing .nmconnection (ignored)")
+    }
+    a.logger.WithField("interface", name).Info("RHEL interface rollback (files removed; no immediate reload)")
+    return nil
 }
 
 // findDeviceByMAC finds the actual device name by MAC address
@@ -251,35 +219,28 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 }
 
 // generateIfcfgContent generates the ifcfg file content
-func (a *RHELAdapter) generateIfcfgContent(iface entities.NetworkInterface, ifaceName string) string {
-	content := fmt.Sprintf(`DEVICE=%s
-NAME=%s
-TYPE=Ethernet
-ONBOOT=yes
-BOOTPROTO=none`, ifaceName, ifaceName)
-
-	// Add IP configuration if available
+func (a *RHELAdapter) generateNMConnection(iface entities.NetworkInterface, ifaceName string) string {
+    b := &strings.Builder{}
+    fmt.Fprintf(b, "[connection]\n")
+    fmt.Fprintf(b, "id=%s\n", ifaceName)
+    fmt.Fprintf(b, "type=ethernet\n")
+    fmt.Fprintf(b, "interface-name=%s\nautoconnect=true\n\n", ifaceName)
+    fmt.Fprintf(b, "[ethernet]\nmac-address=%s\n", strings.ToLower(iface.MacAddress()))
+    if iface.MTU() > 0 { fmt.Fprintf(b, "mtu=%d\n", iface.MTU()) }
+    fmt.Fprintf(b, "\n[ipv4]\nmethod=manual\n")
     if iface.Address() != "" && iface.CIDR() != "" {
-        // Extract prefix from CIDR
-        parts := strings.Split(iface.CIDR(), "/")
-        if len(parts) == 2 {
-            prefix := parts[1]
-            content += fmt.Sprintf("\nIPADDR=%s\nPREFIX=%s", iface.Address(), prefix)
+        parts := strings.Split(iface.CIDR(), "/"); if len(parts) == 2 {
+            fmt.Fprintf(b, "address1=%s/%s\n", iface.Address(), parts[1])
         }
     }
-
-	// Add MTU if specified
-    if iface.MTU() > 0 {
-        content += fmt.Sprintf("\nMTU=%d", iface.MTU())
-    }
-
-	// Always add MAC address
-    content += fmt.Sprintf("\nHWADDR=%s", strings.ToLower(iface.MacAddress()))
-
-	return content
+    fmt.Fprintf(b, "never-default=true\n\n[ipv6]\nmethod=ignore\n")
+    return b.String()
 }
 
-// GenerateIfcfgContentForTest is a test helper method
-func (a *RHELAdapter) GenerateIfcfgContentForTest(iface entities.NetworkInterface, ifaceName string) string {
-	return a.generateIfcfgContent(iface, ifaceName)
+func extractIndexRHEL(name string) int {
+    if strings.HasPrefix(name, constants.InterfacePrefix) {
+        idx := strings.TrimPrefix(name, constants.InterfacePrefix)
+        if n, err := strconv.Atoi(idx); err == nil { return n }
+    }
+    return 0
 }
