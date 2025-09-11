@@ -50,53 +50,24 @@ else
     exit 1
 fi
 
+# 2. 필수 도구 확인
 echo -e "\n${BLUE}2. 필수 도구 확인${NC}"
-# 필수: nerdctl, helm, kubectl, sshpass
-for cmd in nerdctl helm kubectl sshpass; do
-  if ! command -v "$cmd" &>/dev/null; then
-    echo -e "${RED}✗ $cmd가 설치되어 있지 않습니다${NC}"; exit 1
-  fi
+commands=("nerdctl" "helm" "kubectl" "sshpass")
+for cmd in "${commands[@]}"; do
+    if ! command -v $cmd &> /dev/null; then
+        echo -e "${RED}✗ $cmd가 설치되어 있지 않습니다${NC}"
+        exit 1
+    fi
 done
-echo -e "${GREEN}✓ 모든 필수 도구 확인 완료 (builder: nerdctl + containerd)${NC}"
-
-# BuildKit 프리플라이트: 재부팅 후 buildkitd가 죽어있을 수 있으므로 자동 보정
-ensure_buildkit() {
-  # 기존 소켓 우선 탐색
-  for s in \
-    /run/buildkit/buildkitd.sock \
-    /run/buildkit-default/buildkitd.sock \
-    /run/buildkit-k8s.io/buildkitd.sock; do
-    if [ -S "$s" ]; then export BUILDKIT_HOST="unix://$s"; return 0; fi
-  done
-
-  # systemd 서비스가 있으면 우선 시도
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl start buildkit 2>/dev/null || systemctl start buildkitd 2>/dev/null || true
-    for s in /run/buildkit/buildkitd.sock; do
-      if [ -S "$s" ]; then export BUILDKIT_HOST="unix://$s"; return 0; fi
-    done
-  fi
-
-  # 컨테이너로 buildkitd 부팅(재부팅 내내 유지)
-  nerdctl rm -f buildkitd >/dev/null 2>&1 || true
-  nerdctl run -d --name buildkitd --restart=always --privileged \
-    -v /run/buildkit:/run/buildkit moby/buildkit:latest \
-    --addr unix:///run/buildkit/buildkitd.sock
-  sleep 2
-  if [ -S /run/buildkit/buildkitd.sock ]; then
-    export BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
-    return 0
-  fi
-  echo -e "${RED}✗ buildkitd 시작 실패 (nerdctl build 사용 불가)${NC}"; exit 1
-}
+echo -e "${GREEN}✓ 모든 필수 도구 확인 완료${NC}"
 
 # 3. 이미지 빌드
 echo -e "\n${BLUE}3. 이미지 빌드${NC}"
-ensure_buildkit
 if nerdctl build -t ${IMAGE_NAME}:${IMAGE_TAG} .; then
-  echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"
+    echo -e "${GREEN}✓ 이미지 빌드 완료: ${IMAGE_NAME}:${IMAGE_TAG}${NC}"
 else
-  echo -e "${RED}✗ 이미지 빌드 실패${NC}"; exit 1
+    echo -e "${RED}✗ 이미지 빌드 실패${NC}"
+    exit 1
 fi
 
 # 4. 이미지를 모든 노드에 배포
@@ -122,7 +93,7 @@ for node in "${ALL_NODES[@]}"; do
         # SSH Key 인증 사용
         if scp $SCP_OPTIONS ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
             # 원격 노드에서 이미지 로드
-            if ssh $SSH_OPTIONS root@${node} "nerdctl --namespace k8s.io load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
+            if ssh $SSH_OPTIONS root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
                 echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
             else
                 echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
@@ -136,7 +107,7 @@ for node in "${ALL_NODES[@]}"; do
         # SSH 패스워드 인증 사용
         if sshpass -p "$SSH_PASSWORD" scp $SCP_OPTIONS ${TMP_IMAGE_FILE} root@${node}:/tmp/; then
             # 원격 노드에서 이미지 로드
-            if sshpass -p "$SSH_PASSWORD" ssh $SSH_OPTIONS root@${node} "nerdctl --namespace k8s.io load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
+            if sshpass -p "$SSH_PASSWORD" ssh $SSH_OPTIONS root@${node} "nerdctl load -i /tmp/$(basename ${TMP_IMAGE_FILE}) && rm /tmp/$(basename ${TMP_IMAGE_FILE})"; then
                 echo -e "${GREEN}✓ ${node}: 이미지 배포 완료${NC}"
             else
                 echo -e "${RED}✗ ${node}: 이미지 로드 실패${NC}"
@@ -205,7 +176,7 @@ else
 fi
 
 # 6. Helm 차트 배포 (이제 CRD Hook 불필요)
-echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
+echo -에 "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
     --set image.tag=${IMAGE_TAG} \
