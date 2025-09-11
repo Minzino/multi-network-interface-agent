@@ -14,6 +14,7 @@ import (
 
     "github.com/sirupsen/logrus"
     "github.com/stretchr/testify/require"
+    "strings"
 )
 
 // --- Stubs for integration-style tests ---
@@ -76,8 +77,13 @@ func (s *stubExec) ExecuteWithTimeout(ctx context.Context, _ time.Duration, cmd 
             return []byte(out), nil
         }
         if len(args) >= 3 && args[0] == "link" && args[1] == "show" {
-            // Report UP to pass validation
-            return []byte("state UP"), nil
+            // Preflight should see eth0 as DOWN; validation should see multinic* as UP
+            if len(args) >= 3 {
+                ifName := args[2]
+                if ifName == "eth0" { return []byte("state DOWN"), nil }
+                if strings.HasPrefix(ifName, "multinic") { return []byte("state UP"), nil }
+            }
+            return []byte("state DOWN"), nil
         }
     }
     return []byte(""), nil
@@ -153,7 +159,6 @@ func TestConfigureNetwork_ConcurrencyCap(t *testing.T) {
         2*time.Second, // op timeout
         1, // maxRetries
         2.0, // backoff multiplier
-        false, // preflightBlockIfUP
     )
 
     out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})
@@ -186,7 +191,6 @@ func TestConfigureNetwork_RetryEventuallySucceeds(t *testing.T) {
         time.Second,
         2, // allow at least one retry
         2.0,
-        false, // preflightBlockIfUP
     )
 
     out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})

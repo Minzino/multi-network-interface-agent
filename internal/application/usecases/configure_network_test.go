@@ -496,10 +496,9 @@ func TestConfigureNetworkUseCase_Execute(t *testing.T) {
 3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\    link/ether 00:11:22:33:44:55 brd ff:ff:ff:ff:ff:ff`
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "-o", "link", "show").Return([]byte(ipLinkOutput), nil).Maybe()
 			
-			// ip link show [interface] 명령어는 IsInterfaceUp에서 사용됨 (드리프트 검사 시)
-			// 인터페이스별로 UP 상태 응답 설정
-			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "eth0").Return([]byte("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
-			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "multinic0").Return([]byte("3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
+            // Preflight: eth0은 DOWN, Validation: multinic0은 UP으로 응답
+            mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "eth0").Return([]byte("2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000"), nil).Maybe()
+            mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "multinic0").Return([]byte("3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
 			// 일반적인 인터페이스 상태 조회 (존재하지 않는 인터페이스의 경우)
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", mock.AnythingOfType("string")).Return([]byte(""), fmt.Errorf("Device does not exist")).Maybe()
 
@@ -607,10 +606,9 @@ func TestConfigureNetworkUseCase_processInterface(t *testing.T) {
 3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000\    link/ether 00:11:22:33:44:55 brd ff:ff:ff:ff:ff:ff`
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "-o", "link", "show").Return([]byte(ipLinkOutput), nil).Maybe()
 			
-			// ip link show [interface] 명령어는 IsInterfaceUp에서 사용됨 (드리프트 검사 시)
-			// 인터페이스별로 UP 상태 응답 설정
-			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "eth0").Return([]byte("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
-			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "multinic0").Return([]byte("3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
+            // Preflight: eth0은 DOWN, Validation: multinic0은 UP으로 응답
+            mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "eth0").Return([]byte("2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000"), nil).Maybe()
+            mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", "multinic0").Return([]byte("3: multinic0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000"), nil).Maybe()
 			// 일반적인 인터페이스 상태 조회 (존재하지 않는 인터페이스의 경우)
 			mockExecutor.On("ExecuteWithTimeout", mock.Anything, mock.Anything, "ip", "link", "show", mock.AnythingOfType("string")).Return([]byte(""), fmt.Errorf("Device does not exist")).Maybe()
 			

@@ -80,7 +80,6 @@ func TestPreflight_BlockIfUP_Option(t *testing.T) {
         time.Second,
         0,
         2.0,
-        true, // enable: block if interface is UP
     )
 
     out, err := uc.Execute(context.Background(), ConfigureNetworkInput{NodeName: "node"})
