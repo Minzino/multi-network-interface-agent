@@ -37,8 +37,6 @@ type ConfigureNetworkUseCase struct {
     // retry settings
     maxRetries       int
     backoffMultiplier float64
-    // preflight behavior
-    preflightBlockIfUP bool
 }
 
 // NewConfigureNetworkUseCase는 새로운 ConfigureNetworkUseCase를 생성합니다
@@ -59,7 +57,6 @@ func NewConfigureNetworkUseCase(
         repo, configurer, rollbacker, naming, fs, osDetector, logger,
         maxConcurrentTasks, drift, time.Duration(0),
         domconst.DefaultMaxRetries, domconst.DefaultBackoffMultiplier,
-        false, // default: do not block when interface is UP in preflight
     )
 }
 
@@ -77,7 +74,6 @@ func NewConfigureNetworkUseCaseWithDetector(
     opTimeout time.Duration,
     maxRetries int,
     backoffMultiplier float64,
-    preflightBlockIfUP bool,
 ) *ConfigureNetworkUseCase {
     uc := &ConfigureNetworkUseCase{
         repository:         repo,
@@ -92,7 +88,6 @@ func NewConfigureNetworkUseCaseWithDetector(
         opTimeout:          opTimeout,
         maxRetries:         maxRetries,
         backoffMultiplier:  backoffMultiplier,
-        preflightBlockIfUP: preflightBlockIfUP,
     }
     // wire sub usecases
     uc.applier = &ApplyUseCase{parent: uc}
@@ -275,11 +270,9 @@ func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface ent
     if err != nil || strings.TrimSpace(foundName) == "" {
         return errors.NewValidationError("preflight: MAC not present on system", err)
     }
-    // Optional: block if interface is UP (configurable)
-    if uc.preflightBlockIfUP {
-        if uc.isInterfaceUp(ctx, foundName) {
-            return errors.NewValidationError("preflight: target interface is UP", fmt.Errorf("interface %s is up", foundName))
-        }
+    // Default: block if interface is UP. Allow existing multinic* during tests/roll-forward scenarios.
+    if !strings.HasPrefix(foundName, "multinic") && uc.isInterfaceUp(ctx, foundName) {
+        return errors.NewValidationError("preflight: target interface is UP", fmt.Errorf("interface %s is up", foundName))
     }
     return nil
 }
