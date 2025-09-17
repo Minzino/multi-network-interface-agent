@@ -96,15 +96,13 @@ func (r *NodeCRRepository) loadAll(ctx context.Context, nodeName string) ([]enti
         if id == 0 {
             id = i + 1
         }
-        out = append(out, entities.NetworkInterface{
-            ID:               id,
-            MacAddress:       ni.MacAddress,
-            AttachedNodeName: cfg.NodeName,
-            Status:           entities.StatusPending,
-            Address:          ni.Address,
-            CIDR:             ni.CIDR,
-            MTU:              ni.MTU,
-        })
+        ent, err := entities.NewNetworkInterface(id, ni.MacAddress, cfg.NodeName, ni.Address, ni.CIDR, ni.MTU)
+        if err != nil {
+            r.logger.WithError(err).WithField("id", id).Warn("invalid interface entry in node config; skipping")
+            continue
+        }
+        // status defaults to pending
+        out = append(out, *ent)
     }
     return out, nil
 }

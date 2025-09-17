@@ -5,10 +5,16 @@ image:
 
 # 에이전트/CR 데이터 소스 설정 (Controller가 생성하는 Job에서 사용)
 agent:
+  # 데이터 소스: nodecr 고정(데이터베이스 미사용)
+  dataSource: "nodecr"
   # nodeCR 사용 시 조회할 네임스페이스
   nodeCRNamespace: "multinic-system"
   # Prometheus metrics/health 포트
-  metricsPort: "8080"
+  metricsPort: "18080"
+  # Preflight: UP 인터페이스라도 미사용이면 허용. 강행 우회 플래그(기본 false)
+  preflightAllowUp: false
+  # 최대 동시 처리 인터페이스 수 (라우팅 충돌 방지를 위해 기본값 1)
+  maxConcurrentTasks: 1
 
 # 리소스 제한
 resources:

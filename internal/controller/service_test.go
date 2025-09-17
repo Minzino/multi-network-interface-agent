@@ -34,7 +34,7 @@ func TestService_RunOnce_CreatesJobAndUpdatesStatus(t *testing.T) {
     if state != "InProgress" { t.Fatalf("expected InProgress, got %q", state) }
 
     // Simulate job success and second run updates status to Configured
-    _, _ = kclient.BatchV1().Jobs(ns).UpdateStatus(context.Background(), &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "multinic-agent-worker-node-01", Namespace: ns, Labels: map[string]string{"app.kubernetes.io/name": "multinic-agent", "multinic.io/node-name": "worker-node-01"}}, Status: batchv1.JobStatus{Succeeded: 1}}, metav1.UpdateOptions{})
+    _, _ = kclient.BatchV1().Jobs(ns).UpdateStatus(context.Background(), &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "multinic-agent-worker-node-01-g0", Namespace: ns, Labels: map[string]string{"app.kubernetes.io/name": "multinic-agent", "multinic.io/node-name": "worker-node-01"}}, Status: batchv1.JobStatus{Succeeded: 1}}, metav1.UpdateOptions{})
     if err := s.RunOnce(context.Background()); err != nil { t.Fatalf("runonce error 2: %v", err) }
     got, _ = dyn.Resource(nodeCRGVR).Namespace(ns).Get(context.Background(), "worker-node-01", metav1.GetOptions{})
     state, _, _ = unstructured.NestedString(got.Object, "status", "state")

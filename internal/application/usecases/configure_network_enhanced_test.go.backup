@@ -1,0 +1,502 @@
+package usecases
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"multinic-agent/internal/domain/entities"
+	domainErrors "multinic-agent/internal/domain/errors"
+	"multinic-agent/internal/domain/interfaces"
+	"multinic-agent/internal/domain/services"
+
+	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/suite"
+)
+
+// Enhanced Mock implementations for new domain model
+type EnhancedMockNetworkInterfaceRepository struct {
+	mock.Mock
+}
+
+func (m *EnhancedMockNetworkInterfaceRepository) GetByNodeName(ctx context.Context, nodeName string) ([]*entities.NetworkInterface, error) {
+	args := m.Called(ctx, nodeName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*entities.NetworkInterface), args.Error(1)
+}
+
+func (m *EnhancedMockNetworkInterfaceRepository) Save(ctx context.Context, ni *entities.NetworkInterface) error {
+	args := m.Called(ctx, ni)
+	return args.Error(0)
+}
+
+func (m *EnhancedMockNetworkInterfaceRepository) Update(ctx context.Context, ni *entities.NetworkInterface) error {
+	args := m.Called(ctx, ni)
+	return args.Error(0)
+}
+
+func (m *EnhancedMockNetworkInterfaceRepository) Delete(ctx context.Context, nodeName string, interfaceID int) error {
+	args := m.Called(ctx, nodeName, interfaceID)
+	return args.Error(0)
+}
+
+type EnhancedMockNetworkConfigurer struct {
+	mock.Mock
+}
+
+func (m *EnhancedMockNetworkConfigurer) Apply(ctx context.Context, interfaces []*entities.NetworkInterface) error {
+	args := m.Called(ctx, interfaces)
+	return args.Error(0)
+}
+
+func (m *EnhancedMockNetworkConfigurer) GetConfigDir() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+type EnhancedMockNetworkRollbacker struct {
+	mock.Mock
+}
+
+func (m *EnhancedMockNetworkRollbacker) Rollback(ctx context.Context, nodeName string) error {
+	args := m.Called(ctx, nodeName)
+	return args.Error(0)
+}
+
+func (m *EnhancedMockNetworkRollbacker) CleanupOrphanedFiles(ctx context.Context, activeInterfaces []string) error {
+	args := m.Called(ctx, activeInterfaces)
+	return args.Error(0)
+}
+
+// Additional Mock implementations
+type MockInterfaceNamingService struct {
+	mock.Mock
+}
+
+func (m *MockInterfaceNamingService) GenerateNextNameForMAC(macAddress string) (*entities.InterfaceName, error) {
+	args := m.Called(macAddress)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.InterfaceName), args.Error(1)
+}
+
+func (m *MockInterfaceNamingService) FindInterfaceNameByMAC(macAddress string) (string, error) {
+	args := m.Called(macAddress)
+	return args.String(0), args.Error(1)
+}
+
+type MockFileSystem struct {
+	mock.Mock
+}
+
+func (m *MockFileSystem) Exists(path string) bool {
+	args := m.Called(path)
+	return args.Bool(0)
+}
+
+func (m *MockFileSystem) WriteFile(filename string, data []byte, perm int) error {
+	args := m.Called(filename, data, perm)
+	return args.Error(0)
+}
+
+func (m *MockFileSystem) ReadFile(filename string) ([]byte, error) {
+	args := m.Called(filename)
+	return args.Get(0).([]byte), args.Error(1)
+}
+
+func (m *MockFileSystem) RemoveFile(filename string) error {
+	args := m.Called(filename)
+	return args.Error(0)
+}
+
+func (m *MockFileSystem) ListFiles(dir string) ([]string, error) {
+	args := m.Called(dir)
+	return args.Get(0).([]string), args.Error(1)
+}
+
+type MockOSDetector struct {
+	mock.Mock
+}
+
+func (m *MockOSDetector) DetectOS() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+// Test Suite for ConfigureNetwork UseCase with enhanced domain model
+type ConfigureNetworkUseCaseTestSuite struct {
+	suite.Suite
+	ctx           context.Context
+	logger        *logrus.Logger
+	mockRepo      *EnhancedMockNetworkInterfaceRepository
+	mockConfigurer *EnhancedMockNetworkConfigurer
+	mockRollbacker *EnhancedMockNetworkRollbacker
+	useCase       *ConfigureNetworkUseCase
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) SetupTest() {
+	suite.ctx = context.Background()
+	suite.logger = logrus.New()
+	suite.logger.SetLevel(logrus.ErrorLevel) // Reduce noise in tests
+
+	suite.mockRepo = &EnhancedMockNetworkInterfaceRepository{}
+	suite.mockConfigurer = &EnhancedMockNetworkConfigurer{}
+	suite.mockRollbacker = &EnhancedMockNetworkRollbacker{}
+
+	mockNamingService := &MockInterfaceNamingService{}
+	mockFileSystem := &MockFileSystem{}
+	mockOSDetector := &MockOSDetector{}
+	
+	suite.useCase = NewConfigureNetworkUseCase(
+		suite.mockRepo,
+		suite.mockConfigurer,
+		suite.mockRollbacker,
+		mockNamingService,
+		mockFileSystem,
+		mockOSDetector,
+		suite.logger,
+		5, // maxConcurrentTasks
+	)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TearDownTest() {
+	suite.mockRepo.AssertExpectations(suite.T())
+	suite.mockConfigurer.AssertExpectations(suite.T())
+	suite.mockRollbacker.AssertExpectations(suite.T())
+}
+
+// Helper function to create test network interface
+func (suite *ConfigureNetworkUseCaseTestSuite) createTestInterface(id int, nodeName, macAddr, ipAddr, cidr string, mtu int) *entities.NetworkInterface {
+	ni, err := entities.NewNetworkInterface(id, macAddr, nodeName, ipAddr, cidr, mtu)
+	suite.Require().NoError(err)
+	return ni
+}
+
+// Test Cases
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_Success_SingleInterface() {
+	// Given
+	nodeName := "test-node-01"
+	testInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	suite.mockConfigurer.On("Apply", suite.ctx, input.Interfaces).Return(nil)
+	suite.mockRepo.On("Save", suite.ctx, testInterface).Return(nil)
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.NoError(err)
+	suite.NotNil(output)
+	suite.Equal(1, output.ProcessedCount)
+	suite.Equal(0, output.FailedCount)
+	suite.Equal(1, output.TotalCount)
+	suite.Len(output.Results, 1)
+	suite.Empty(output.Failures)
+	suite.True(output.Results[0].Success)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_Success_MultipleInterfaces() {
+	// Given
+	nodeName := "test-node-01"
+	interfaces := []*entities.NetworkInterface{
+		suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500),
+		suite.createTestInterface(1, nodeName, "fa:16:3e:0a:17:3b", "192.168.1.11", "192.168.1.0/24", 1500),
+		suite.createTestInterface(2, nodeName, "fa:16:3e:2b:4c:8d", "192.168.1.12", "192.168.1.0/24", 9000), // Jumbo frame
+	}
+
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: interfaces,
+	}
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	suite.mockConfigurer.On("Apply", suite.ctx, interfaces).Return(nil)
+	for _, iface := range interfaces {
+		suite.mockRepo.On("Save", suite.ctx, iface).Return(nil)
+	}
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.NoError(err)
+	suite.Equal(3, output.ProcessedCount)
+	suite.Equal(0, output.FailedCount)
+	suite.Len(output.Results, 3)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_ValidationError_EmptyNodeName() {
+	// Given
+	input := ConfigureNetworkInput{
+		NodeName:   "",
+		Interfaces: []*entities.NetworkInterface{},
+	}
+
+	// When & Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.True(domainErrors.IsValidationError(err))
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_ValidationError_NoInterfaces() {
+	// Given
+	input := ConfigureNetworkInput{
+		NodeName:   "test-node-01",
+		Interfaces: []*entities.NetworkInterface{},
+	}
+
+	// When & Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.True(domainErrors.IsValidationError(err))
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_ValidationError_InvalidInterface() {
+	// This test demonstrates value object validation
+	// Given - creating an invalid interface should fail
+	_, err := entities.NewNetworkInterface(0, "invalid-mac", "test-node-01", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	// Then
+	suite.Error(err)
+	suite.True(domainErrors.IsValidationError(err))
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_NetworkConfigurationError_WithRollback() {
+	// Given
+	nodeName := "test-node-01"
+	testInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	configError := domainErrors.NewNetworkError("failed to apply network configuration", nil).
+		WithContext("network_configuration", "netplan_adapter").
+		WithRetryable(true)
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	suite.mockConfigurer.On("Apply", suite.ctx, input.Interfaces).Return(configError)
+	suite.mockRollbacker.On("Rollback", suite.ctx, nodeName).Return(nil)
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.True(domainErrors.IsNetworkError(err))
+	suite.mockRollbacker.AssertCalled(suite.T(), "Rollback", suite.ctx, nodeName)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_RepositoryError_DatabaseFailure() {
+	// Given
+	nodeName := "test-node-01"
+	testInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	dbError := domainErrors.NewSystemError("database connection failed", nil).
+		WithContext("database_query", "mysql_repository").
+		WithRetryable(true)
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return(nil, dbError)
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.True(domainErrors.IsSystemError(err))
+	
+	// Verify configurer was not called due to early failure
+	suite.mockConfigurer.AssertNotCalled(suite.T(), "Apply")
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_PartialFailure_SomeInterfacesSaved() {
+	// Given
+	nodeName := "test-node-01"
+	interfaces := []*entities.NetworkInterface{
+		suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500),
+		suite.createTestInterface(1, nodeName, "fa:16:3e:0a:17:3b", "192.168.1.11", "192.168.1.0/24", 1500),
+	}
+
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: interfaces,
+	}
+
+	saveError := domainErrors.NewSystemError("failed to save interface", nil).
+		WithContext("database_save", "mysql_repository")
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	suite.mockConfigurer.On("Apply", suite.ctx, interfaces).Return(nil)
+	suite.mockRepo.On("Save", suite.ctx, interfaces[0]).Return(nil)
+	suite.mockRepo.On("Save", suite.ctx, interfaces[1]).Return(saveError)
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.NoError(err) // Partial failure should not return error
+	suite.NotNil(output)
+	suite.Equal(1, output.ProcessedCount)
+	suite.Equal(1, output.FailedCount)
+	suite.Equal(2, output.TotalCount)
+	suite.Len(output.Results, 2)
+	suite.Len(output.Failures, 1)
+	
+	// Verify results
+	suite.True(output.Results[0].Success)
+	suite.False(output.Results[1].Success)
+	suite.NotEmpty(output.Results[1].Error)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_ContextCancellation() {
+	// Given
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	nodeName := "test-node-01"
+	testInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	// When & Then
+	output, err := suite.useCase.Execute(cancelledCtx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.Equal(context.Canceled, err)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_TimeoutError() {
+	// Given
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	nodeName := "test-node-01"
+	testInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	// When - Add delay to trigger timeout
+	suite.mockRepo.On("GetByNodeName", mock.Anything, nodeName).Return([]*entities.NetworkInterface{}, nil).Run(func(args mock.Arguments) {
+		time.Sleep(10 * time.Millisecond) // Longer than timeout
+	})
+
+	// Then
+	output, err := suite.useCase.Execute(timeoutCtx, input)
+
+	suite.Error(err)
+	suite.Nil(output)
+	suite.Equal(context.DeadlineExceeded, err)
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_BusinessRule_IPNotInCIDR() {
+	// This test shows that domain validation is working
+	// Given - try to create interface with IP not in CIDR
+	_, err := entities.NewNetworkInterface(0, "fa:16:3e:1c:1a:6e", "test-node-01", "10.0.0.1", "192.168.1.0/24", 1500)
+
+	// Then
+	suite.Error(err)
+	suite.True(domainErrors.IsValidationError(err))
+	suite.Contains(err.Error(), "VAL015") // Business rule validation error code
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_ValueObject_InvalidMTU() {
+	// This test shows MTU value object validation
+	// Given - try to create interface with invalid MTU
+	_, err := entities.NewNetworkInterface(0, "fa:16:3e:1c:1a:6e", "test-node-01", "192.168.1.10", "192.168.1.0/24", 50) // MTU too small
+
+	// Then
+	suite.Error(err)
+	suite.True(domainErrors.IsValidationError(err))
+	suite.Contains(err.Error(), "VAL008") // MTU validation error code
+}
+
+func (suite *ConfigureNetworkUseCaseTestSuite) TestExecute_JumboFrameInterface() {
+	// Given
+	nodeName := "test-node-01"
+	jumboInterface := suite.createTestInterface(0, nodeName, "fa:16:3e:1c:1a:6e", "192.168.1.10", "192.168.1.0/24", 9000)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{jumboInterface},
+	}
+
+	// When
+	suite.mockRepo.On("GetByNodeName", suite.ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	suite.mockConfigurer.On("Apply", suite.ctx, input.Interfaces).Return(nil)
+	suite.mockRepo.On("Save", suite.ctx, jumboInterface).Return(nil)
+
+	// Then
+	output, err := suite.useCase.Execute(suite.ctx, input)
+
+	suite.NoError(err)
+	suite.True(jumboInterface.IsJumboFrame())
+	suite.Equal(1, output.ProcessedCount)
+}
+
+// Run the test suite
+func TestConfigureNetworkUseCaseTestSuite(t *testing.T) {
+	suite.Run(t, new(ConfigureNetworkUseCaseTestSuite))
+}
+
+// Benchmark tests for performance
+func BenchmarkConfigureNetworkUseCase_Execute(b *testing.B) {
+	ctx := context.Background()
+	logger := logrus.New()
+	logger.SetLevel(logrus.ErrorLevel)
+
+	mockRepo := &EnhancedMockNetworkInterfaceRepository{}
+	mockConfigurer := &EnhancedMockNetworkConfigurer{}
+	mockRollbacker := &EnhancedMockNetworkRollbacker{}
+
+	useCase := NewConfigureNetworkUseCase(mockRepo, mockConfigurer, mockRollbacker, logger)
+
+	// Setup
+	nodeName := "test-node-01"
+	testInterface, _ := entities.NewNetworkInterface(0, "fa:16:3e:1c:1a:6e", nodeName, "192.168.1.10", "192.168.1.0/24", 1500)
+	
+	input := ConfigureNetworkInput{
+		NodeName:   nodeName,
+		Interfaces: []*entities.NetworkInterface{testInterface},
+	}
+
+	// Mock expectations (will be called multiple times)
+	mockRepo.On("GetByNodeName", ctx, nodeName).Return([]*entities.NetworkInterface{}, nil)
+	mockConfigurer.On("Apply", ctx, input.Interfaces).Return(nil)
+	mockRepo.On("Save", ctx, testInterface).Return(nil)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = useCase.Execute(ctx, input)
+	}
+}

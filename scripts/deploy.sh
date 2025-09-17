@@ -176,7 +176,7 @@ else
 fi
 
 # 6. Helm 차트 배포 (이제 CRD Hook 불필요)
-echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
+echo -에 "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --namespace $NAMESPACE \
     --set image.tag=${IMAGE_TAG} \

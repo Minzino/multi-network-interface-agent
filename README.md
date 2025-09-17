@@ -4,132 +4,168 @@
 
 OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스를 **완전 자동으로 관리**하는 Controller + Job 기반 시스템입니다.
 
-## 📋 개요
+## 개요
 
 ### 핵심 특징
 - **단일 이미지, 이중 실행**: 하나의 컨테이너 이미지에서 Controller/Agent 모드로 동작
 - **자동화 워크플로우**: CR 생성/수정 시 즉시 해당 노드에 Agent Job 스케줄링
 - **노드별 맞춤 실행**: 각 노드의 SystemUUID 검증 후 네트워크 인터페이스 자동 설정
 - **실시간 상태 동기화**: Job 완료 후 Controller가 자동으로 CR status 업데이트
+- **라우팅 충돌 방지**: 전역 라우팅 직렬화로 네트워크 테이블 안정성 보장
+- **성능 최적화**: 안정성 우선 동시성 제어 (기본 1개 작업, 설정 가능)
+  
 
 ### 동작 방식
 1. **Controller (Deployment)**: CR 변경사항을 실시간 감시
 2. **Agent (Job)**: 특정 노드에서만 실행되어 네트워크 인터페이스 설정
 3. **자동 스케줄링**: CR 업데이트 → 해당 노드용 Agent Job 생성 → 네트워크 구성 → 상태 업데이트
 
-## 🔄 현재 로직 흐름
+### 결정 사항(운영 철학)
+- 런타임 적용은 `ip` 기반으로 즉시 반영(이름/MTU/IPv4/라우트)
+- 영속성은 OS별 파일 “작성만” 수행(즉시 `netplan apply`/`nmcli reload` 호출 없음)
+- Ubuntu: netplan YAML에 `match.macaddress + set-name` 포함으로 이름 영속
+- RHEL: `.link`(systemd-udev, 이름 영속) + `.nmconnection`(NetworkManager, 권한 600) 작성, Helm이 `/etc/systemd/network`도 마운트
+- Preflight: UP NIC이라도 IPv4/라우트/마스터 소속이 없으면 허용; 우회 플래그 `PREFLIGHT_ALLOW_UP` 제공
+- 라우팅/기본경로 변경은 전역 직렬화
+
+## 현재 로직 흐름
 
 ### 시스템 아키텍처
 
 ```mermaid
 graph TB
-    External[External System<br/>📋 OpenStack 모니터링]
+  %% 상단: MGMT Cluster
+  subgraph "MGMT Cluster"
+    Operator[Operator]
+    ViolaAPI[Viola API]
+  end
 
-subgraph "Kubernetes Cluster"
-subgraph "CR 처리"
-MultiNICController[MultiNIC Controller<br/>👁️ CR Watch]
-NodeCR[MultiNicNodeConfig CR<br/>📋 노드별 Interface 데이터:<br/>- Worker01: 2 interfaces<br/>- Worker02: 1 interface<br/>- Worker03: 3 interfaces]
-end
+  %% Biz Cluster
+  subgraph "Kubernetes Cluster (Biz)"
+    subgraph "CR 처리"
+      MultiNICController[MultiNIC Controller\nCR Watch]
+      NodeCR[MultiNicNodeConfig CR\n노드별 Interface 데이터]
+    end
 
-subgraph "Job 실행"
-Job1[Agent Job<br/>Worker01 처리]
-Job2[Agent Job<br/>Worker02 처리]
-Job3[Agent Job<br/>Worker03 처리]
-end
+    subgraph "Job 실행"
+      Job1[Agent Job\nNode1 대상]
+      Job2[Agent Job\nNode2 대상]
+      Job3[Agent Job\nNode3 대상]
+    end
 
-subgraph "Worker Nodes"
-Node1[Worker01<br/>SystemUUID: b4975c5f-50bb]
-Node2[Worker02<br/>SystemUUID: d4defd76-faa9]
-Node3[Worker03<br/>SystemUUID: a1b2c3d4-e5f6]
-end
-end
+    subgraph "Worker Nodes"
+      Node1[Node1\nSystemUUID: b4975c5f-50bb]
+      Node2[Node2\nSystemUUID: d4defd76-faa9]
+      Node3[Node3\nSystemUUID: a1b2c3d4-e5f6]
+    end
+  end
 
-subgraph "Network Interfaces"
-NIC1[Worker01: multinic0, multinic1]
-NIC2[Worker02: multinic0]
-NIC3[Worker03: multinic0, multinic1, multinic2]
-end
+  %% Network Interfaces
+  subgraph "Network Interfaces"
+    NIC1[Node1: multinic0, multinic1]
+    NIC2[Node2: multinic0]
+    NIC3[Node3: multinic0, multinic1, multinic2]
+  end
 
-%% 데이터 흐름
-External -->|① CR 생성<br/>노드별 설정| NodeCR
-NodeCR -.->|② Watch Event<br/>실시간 감지| MultiNICController
-MultiNICController -->|③ Node별 Job 스케줄링| Job1
-MultiNICController -->|③ Node별 Job 스케줄링| Job2
-MultiNICController -->|③ Node별 Job 스케줄링| Job3
-Job1 -->|④ 네트워크 구성| Node1
-Job2 -->|④ 네트워크 구성| Node2
-Job3 -->|④ 네트워크 구성| Node3
-Node1 -->|⑤ 인터페이스 생성| NIC1
-Node2 -->|⑤ 인터페이스 생성| NIC2
-Node3 -->|⑤ 인터페이스 생성| NIC3
+  %% 데이터 흐름
+  Operator -->|인터페이스 정보 POST| ViolaAPI
+  ViolaAPI -->|CR 생성| NodeCR
+  NodeCR -.->|Watch Event| MultiNICController
+  MultiNICController -->|Node별 Job 스케줄링| Job1
+  MultiNICController -->|Node별 Job 스케줄링| Job2
+  MultiNICController -->|Node별 Job 스케줄링| Job3
+  Job1 -->|ip 적용 + 영속 파일 작성| Node1
+  Job2 -->|ip 적용 + 영속 파일 작성| Node2
+  Job3 -->|ip 적용 + 영속 파일 작성| Node3
+  Node1 -->|인터페이스 생성| NIC1
+  Node2 -->|인터페이스 생성| NIC2
+  Node3 -->|인터페이스 생성| NIC3
 
-%% 스타일링
-classDef external fill:#e8f5e8
-classDef controller fill:#f3e5f5
-classDef cr fill:#fff3e0
-classDef job fill:#ffecb3
-classDef node fill:#fafafa
-classDef nic fill:#ffcdd2
+  %% 스타일(렌더러 미지원 시 제거 가능)
+  classDef mgmt fill:#e8f5e8
+  classDef controller fill:#f3e5f5
+  classDef cr fill:#fff3e0
+  classDef job fill:#ffecb3
+  classDef node fill:#fafafa
+  classDef nic fill:#ffcdd2
 
-class External external
-class MultiNICController controller
-class NodeCR cr
-class Job1,Job2,Job3 job
-class Node1,Node2,Node3 node
-class NIC1,NIC2,NIC3 nic
+  class Operator,ViolaAPI mgmt
+  class MultiNICController controller
+  class NodeCR cr
+  class Job1,Job2,Job3 job
+  class Node1,Node2,Node3 node
+  class NIC1,NIC2,NIC3 nic
 ```
 
 ### 처리 워크플로우
 
 ```mermaid
 sequenceDiagram
-    participant External as External System
-    participant K8s as Kubernetes API
-    participant Controller as MultiNIC Controller
-    participant Job as Agent Job
-    participant Node as Worker Node
+    participant 운영 as Config Source
+    participant API as Kubernetes API
+    participant 컨트롤러 as Controller
+    participant 잡 as Agent Job
+    participant 노드 as Target Node
 
-    Note over External: 1️⃣ CR 생성
-    External->>K8s: MultiNicNodeConfig CR 생성
+    운영->>API: CR 생성/수정 (MAC, IP, CIDR, MTU)
+    note over 운영,API: 외부 API도 CR을 직접 생성/갱신할 수 있음
+    API-->>컨트롤러: Watch 이벤트 전달
+    컨트롤러->>API: 노드 정보 조회(osImage/SystemUUID)
+    컨트롤러->>API: Agent Job 생성(nodeSelector)
 
-    Note over Controller: 2️⃣ 실시간 감지
-    K8s-->>Controller: Watch Event<br/>(CR 변경 감지)
-    Controller->>Controller: Instance ID → SystemUUID 매핑
+    API->>잡: 대상 노드에서 실행
+    잡->>노드: Preflight (MAC 확인, 미사용 NIC 허용)
+    잡->>노드: ip 기반 적용(이름, MTU, IPv4, 라우트)
+    잡->>노드: 영속 파일만 작성(Ubuntu: netplan, RHEL: .link + .nmconnection)
+    잡->>노드: 검증 및 termination log 기록
 
-    Note over Job: 3️⃣ Job 스케줄링
-    Controller->>K8s: Node SystemUUID 조회
-    Controller->>K8s: Agent Job 생성<br/>(nodeSelector 적용)
-
-    Note over Node: 4️⃣ 네트워크 구성
-    K8s->>Job: Job 실행 (타겟 노드)
-    Job->>Node: 고아 인터페이스 정리
-    Job->>Node: 새로운 네트워크 설정<br/>(Netplan/ifcfg)
-    Job->>Node: 드리프트 감지 및 동기화
-
-    Note over Controller: 5️⃣ 상태 업데이트
-    Job-->>Controller: 실행 결과 수집
-    Controller->>K8s: CR 상태 업데이트<br/>(Configured/Failed)
-    Controller->>K8s: Job 정리 (TTL)
+    잡-->>컨트롤러: 요약 전달
+    컨트롤러->>API: CR 상태 업데이트(Configured/Failed)
+    컨트롤러->>API: Job 정리(TTL)
 ```
 
-## ⚙️ Agent Job 동작(중요 변경)
+## Agent Job 동작 및 안정성
 
-- 시작 시 정리 수행(RUN_MODE=job):
-  - Ubuntu: `/etc/netplan/9*-multinic*.yaml`만 삭제 후 `netplan apply` 실행
-  - RHEL: `/etc/sysconfig/network-scripts/ifcfg-multinic*`만 삭제
+### 네트워크 구성 프로세스
+- **시작 시 정리 수행**(RUN_MODE=job):
+  - Ubuntu: `/etc/netplan/9*-multinic*.yaml` 고아 파일만 삭제(즉시 `netplan apply`는 호출하지 않음)
+  - RHEL: RHEL9+에서는 `/etc/sysconfig/network-scripts`가 없을 수 있으므로 `.nmconnection` 고아 파일만 정리하고 디렉터리 부재는 무시
   - 시스템 기본 파일(`50-cloud-init.yaml` 등)은 건드리지 않음
   - 남아있는 `multinic0~9` 인터페이스는 DOWN 상태일 때만 altname(ens*/enp*)으로 rename 시도(없으면 스킵)
-- 이름 충돌 방지(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
-- 검증 방식 전환(이름→MAC):
+
+- **이름 충돌 방지**(사전 배정): 실행 시작 시 MAC→`multinicX` 이름을 미리 배정해 중복 이름 충돌을 제거
+
+- **검증 방식 전환**(이름→MAC):
   - 적용 후 검증은 `ip -o link show` 전체에서 CR의 MAC 존재 여부로 판단(특정 이름에 의존하지 않음)
-- 처리 순서: “정리 → 설정(적용) → 검증”으로 실행
+
+- **처리 순서**: "정리 → 설정(적용) → 검증"으로 실행
+
+### 안정성 기능
+- **라우팅 충돌 방지**:
+  - 전역 mutex를 통한 라우팅 테이블 직렬화
+  - 동시 네트워크 설정으로 인한 라우팅 테이블 경쟁 상태 방지
+  - 라우팅 작업 메트릭 수집 (실행 시간, 성공/실패율)
+
+- **동시성 제어 최적화**:
+  - 기본 최대 동시 작업 수: 1개 (안정성 우선)
+  - Helm values를 통한 설정 가능 (`maxConcurrentTasks`)
+  - 대규모 환경에서 라우팅 충돌 최소화
   
 
-권장 값(초기 구동 안정화):
+### 권장 배포 설정 (안정성 우선)
 ```bash
+# 기본 설정 (안정성 최우선)
 helm upgrade --install multinic-agent ./deployments/helm \
   -n multinic-system \
-  --set image.tag=1.0.0
+  --set image.tag=1.0.0 \
+  --set maxConcurrentTasks=1
+
+# 대규모 환경 (성능 우선시)
+helm upgrade --install multinic-agent ./deployments/helm \
+  -n multinic-system \
+  --set image.tag=1.0.0 \
+  --set maxConcurrentTasks=3
+
 ```
 
 수동 전체 정리(옵션):
@@ -138,7 +174,7 @@ helm upgrade --install multinic-agent ./deployments/helm \
 AGENT_ACTION=cleanup
 ```
 
-## 📦 패키지 구조
+## 패키지 구조
 
 ```
 multinic-agent/
@@ -149,12 +185,13 @@ multinic-agent/
 │   ├── domain/               # 도메인 계층
 │   │   ├── entities/         # NetworkInterface, InterfaceName
 │   │   ├── interfaces/       # Repository, Network 인터페이스
-│   │   └── services/         # InterfaceNamingService
+│   │   └── services/         # InterfaceNamingService, RoutingCoordinator
 │   ├── application/          # 애플리케이션 계층
 │   │   └── usecases/        # ConfigureNetwork, DeleteNetwork
 │   ├── infrastructure/       # 인프라스트럭처 계층
 │   │   ├── persistence/     # MySQL Repository
 │   │   ├── network/         # Netplan, RHEL Adapter
+│   │   ├── metrics/         # Prometheus 메트릭 수집
 │   │   └── config/         # 설정 관리
 │   └── controller/          # Controller 구현
 │       ├── reconciler.go   # CR 처리 로직
@@ -248,7 +285,7 @@ spec:
       mtu: 1450
 ```
 
-## 🚀 배포 방법
+## 배포 방법
 
 ### 1. SSH 패스워드 설정
 ```bash
@@ -258,7 +295,7 @@ vi scripts/deploy.sh
 ```
 
 
-## 🚀 빠른 시작
+## 빠른 시작
 
 ### 사전 요구사항
 - Kubernetes 1.24+
@@ -336,6 +373,8 @@ kubectl get crd multinicnodeconfigs.multinic.io
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
   --set image.tag=1.0.0 \
+  --set agent.metricsPort=18080 \
+  --set agent.preflightAllowUp=false \
   --wait --timeout=300s
 ```
 
@@ -359,10 +398,10 @@ helm upgrade --install multinic-agent ./deployments/helm \
 kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
 ```
 
-**이 단계에서 생성되는 리소스:**
-- ✅ **Controller Deployment**: CR 감시 및 Agent Job 스케줄링
-- ✅ **ServiceAccount + RBAC**: Job 생성 권한 설정
-- 🔄 **자동화 시작**: 이제 CR 생성 시 자동으로 Agent Job 실행
+이 단계에서 생성되는 리소스:
+- Controller Deployment: CR 감시 및 Agent Job 스케줄링
+- ServiceAccount + RBAC: Job 생성 권한 설정
+- 자동화 시작: 이제 CR 생성 시 자동으로 Agent Job 실행
 
 ### 업그레이드
 ```bash
@@ -385,7 +424,7 @@ kubectl delete crd multinicnodeconfigs.multinic.io
 kubectl delete namespace multinic-system
 ```
 
-## 🚀 원클릭 배포 (자동화)
+## 원클릭 배포 (자동화)
 
 이 Helm 차트는 MultiNic Agent의 모든 컴포넌트를 Kubernetes 클러스터에 배포하고 관리합니다.
 
@@ -402,15 +441,16 @@ SSH_PASSWORD=${SSH_PASSWORD:-"배포 대상 ssh password 입력"}
 ./scripts/deploy.sh
 ```
 
-**배포 스크립트 기능:**
-- ✅ 필수 도구 확인 (`nerdctl`, `helm`, `kubectl`, `sshpass`)
-- 🔨 이미지 빌드 (`nerdctl build`)
-- 📦 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
-- 🎯 CRD 설치 (`kubectl apply`)
-- ⚙️ Helm 차트 배포 (`helm upgrade --install`)
-- ✅ 배포 상태 확인
+배포 스크립트 기능:
+- 필수 도구 확인 (`nerdctl`, `helm`, `kubectl`, `sshpass`)
+- 이미지 빌드 (`nerdctl build`)
+- 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
+- CRD 설치 (`kubectl apply`)
+- Helm 차트 배포 (`helm upgrade --install`)
+- 배포 상태 확인
+- 라우팅 직렬화 설정 유지, 메트릭 수집 활성화
 
-## ✅ 배포 완료 확인
+## 배포 완료 확인
 
 ### 1. Controller 상태 확인
 ```bash
@@ -444,4 +484,88 @@ kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metad
 root@bastion:~/multinic-agent# kubectl get multinicnodeconfigs -n multinic-system -o custom-columns=NAME:.metadata.name,STATE:.status.state
 NAME                  STATE
 viola2-biz-master03   Configured
+```
+
+## ⚙️ 고급 설정 옵션
+
+### Helm Values 설정 (values.yaml)
+
+#### 기본 성능 설정
+```yaml
+# 동시성 제어 (안정성 vs 성능 균형)
+maxConcurrentTasks: 1          # 기본값: 안정성 우선 (1-10 권장)
+
+# 이미지 설정
+image:
+  repository: multinic-agent
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+```
+
+#### RHEL 환경 SELinux 설정
+```yaml
+# RHEL SELinux 지원 활성화
+rhelAdapter:
+  enableSELinuxRestore: false  # 기본값: 비활성화
+                              # true로 설정시 파일 생성 후 restorecon 자동 실행
+```
+
+#### 리소스 및 보안 설정
+```yaml
+# Pod 리소스 제한
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# 보안 컨텍스트
+securityContext:
+  runAsNonRoot: false          # 네트워크 설정을 위해 root 권한 필요
+  privileged: true             # 호스트 네트워크 접근 필요
+```
+
+### 환경별 배포 예시
+
+#### 개발/테스트 환경 (빠른 반복)
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set maxConcurrentTasks=3 \
+  --set image.pullPolicy=Always \
+  --set resources.limits.cpu=1000m \
+  --set resources.limits.memory=1Gi
+```
+
+#### 프로덕션 환경 (안정성 최우선)
+```bash
+helm upgrade --install multinic-agent ./deployments/helm \
+  --namespace multinic-system \
+  --set maxConcurrentTasks=1 \
+  --set resources.limits.cpu=500m \
+  --set resources.limits.memory=512Mi
+```
+
+### 모니터링 및 로깅
+
+#### 메트릭 확인 (Prometheus 연동시)
+```bash
+# 라우팅 작업 메트릭 확인
+curl http://localhost:8080/metrics | grep routing
+
+# 예상 메트릭:
+# routing_operation_duration_seconds_sum
+# routing_operation_duration_seconds_count  
+# routing_operation_total{operation="configure",result="success"}
+```
+
+#### 로그 모니터링
+```bash
+# Controller 로그 (CR 처리 과정)
+kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller -f
+
+# Agent Job 로그 (실제 네트워크 설정)
+kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-job -f
 ```

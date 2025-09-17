@@ -40,7 +40,7 @@ func NewInterfaceNamingService(fs interfaces.FileSystem, executor interfaces.Com
 }
 
 // GenerateNextName은 사용 가능한 다음 인터페이스 이름을 생성합니다
-func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, error) {
+func (s *InterfaceNamingService) GenerateNextName() (*entities.InterfaceName, error) {
 	s.namingMutex.Lock()
 	defer s.namingMutex.Unlock()
 
@@ -56,12 +56,12 @@ func (s *InterfaceNamingService) GenerateNextName() (entities.InterfaceName, err
 		return entities.NewInterfaceName(name)
 	}
 
-	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
+	return nil, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
 
 // GenerateNextNameForMAC은 특정 MAC 주소에 대한 인터페이스 이름을 생성합니다
 // 이미 해당 MAC 주소로 설정된 인터페이스가 있다면 해당 이름을 재사용합니다
-func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (entities.InterfaceName, error) {
+func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (*entities.InterfaceName, error) {
 	s.namingMutex.Lock()
 	defer s.namingMutex.Unlock()
 
@@ -99,7 +99,7 @@ func (s *InterfaceNamingService) GenerateNextNameForMAC(macAddress string) (enti
 }
 
 // generateNextNameInternal은 락이 이미 걸린 상태에서 호출되는 내부 함수입니다
-func (s *InterfaceNamingService) generateNextNameInternal() (entities.InterfaceName, error) {
+func (s *InterfaceNamingService) generateNextNameInternal() (*entities.InterfaceName, error) {
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
 
@@ -112,7 +112,7 @@ func (s *InterfaceNamingService) generateNextNameInternal() (entities.InterfaceN
 		return entities.NewInterfaceName(name)
 	}
 
-	return entities.InterfaceName{}, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
+	return nil, fmt.Errorf("사용 가능한 인터페이스 이름이 없습니다 (multinic0-9 모두 사용 중)")
 }
 
 // isInterfaceInUse는 인터페이스가 이미 사용 중인지 확인합니다
@@ -154,12 +154,12 @@ func (s *InterfaceNamingService) ReserveNamesForInterfaces(ifaces []entities.Net
 		macLower := strings.ToLower(mac)
 		// 요청 목록에 포함되는 MAC만 배정
 		for _, iface := range ifaces {
-			if strings.EqualFold(iface.MacAddress, macLower) || strings.EqualFold(strings.ToLower(iface.MacAddress), macLower) {
+			if strings.EqualFold(iface.MacAddress(), macLower) || strings.EqualFold(strings.ToLower(iface.MacAddress()), macLower) {
 				if _, exists := s.reservedByMac[macLower]; !exists {
 					if en, err := entities.NewInterfaceName(name); err == nil {
 						s.reservedByMac[macLower] = name
 						s.reservedNames[name] = true
-						result[macLower] = en
+						result[macLower] = *en
 					}
 				}
 			}
@@ -168,7 +168,7 @@ func (s *InterfaceNamingService) ReserveNamesForInterfaces(ifaces []entities.Net
 
 	// 2) 남은 MAC들에 대해 비어있는 이름을 순차 배정
 	for _, iface := range ifaces {
-		macLower := strings.ToLower(iface.MacAddress)
+		macLower := strings.ToLower(iface.MacAddress())
 		if _, ok := s.reservedByMac[macLower]; ok {
 			continue
 		}
@@ -187,7 +187,7 @@ func (s *InterfaceNamingService) ReserveNamesForInterfaces(ifaces []entities.Net
 		s.reservedByMac[macLower] = chosen
 		s.reservedNames[chosen] = true
 		if en, err := entities.NewInterfaceName(chosen); err == nil {
-			result[macLower] = en
+			result[macLower] = *en
 		}
 	}
 
@@ -203,7 +203,7 @@ func (s *InterfaceNamingService) GetCurrentMultinicInterfaces() []entities.Inter
 		name := fmt.Sprintf("multinic%d", i)
 		if s.isInterfaceInUse(name) {
 			if interfaceName, err := entities.NewInterfaceName(name); err == nil {
-				interfaces = append(interfaces, interfaceName)
+				interfaces = append(interfaces, *interfaceName)
 			}
 		}
 	}
@@ -217,17 +217,17 @@ func (s *InterfaceNamingService) GetMacAddressForInterface(interfaceName string)
 	defer cancel()
 
 	// ip addr show 명령어로 특정 인터페이스 정보 조회
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "addr", "show", interfaceName)
-	if err != nil {
-		return "", fmt.Errorf("인터페이스 %s 정보 조회 실패: %w", interfaceName, err)
-	}
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "addr", "show", interfaceName)
+    if err != nil {
+        return "", fmt.Errorf("failed to query interface %s: %w", interfaceName, err)
+    }
 
 	// MAC 주소 추출 (예: "link/ether fa:16:3e:00:be:63 brd ff:ff:ff:ff:ff:ff")
 	macRegex := regexp.MustCompile(`link/ether\s+([a-fA-F0-9:]{17})`)
 	matches := macRegex.FindStringSubmatch(string(output))
-	if len(matches) < 2 {
-		return "", fmt.Errorf("인터페이스 %s에서 MAC 주소를 찾을 수 없습니다", interfaceName)
-	}
+    if len(matches) < 2 {
+        return "", fmt.Errorf("could not find MAC address on interface %s", interfaceName)
+    }
 
 	return matches[1], nil
 }
@@ -275,10 +275,10 @@ func (s *InterfaceNamingService) FindInterfaceNameByMAC(macAddress string) (stri
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "-o", "link", "show")
-	if err != nil {
-		return "", fmt.Errorf("시스템 인터페이스 나열 실패: %w", err)
-	}
+    output, err := s.commandExecutor.ExecuteWithTimeout(ctx, 10*time.Second, "ip", "-o", "link", "show")
+    if err != nil {
+        return "", fmt.Errorf("failed to list system interfaces: %w", err)
+    }
 
 	macLower := strings.ToLower(strings.TrimSpace(macAddress))
 	// 예: "2: ens3: <...> mtu ... qdisc ... state ... link/ether fa:16:3e:e8:ae:9d brd ..."
@@ -294,7 +294,7 @@ func (s *InterfaceNamingService) FindInterfaceNameByMAC(macAddress string) (stri
 			}
 		}
 	}
-	return "", fmt.Errorf("MAC %s 를 가진 인터페이스를 찾지 못했습니다", macAddress)
+    return "", fmt.Errorf("interface with MAC %s not found", macAddress)
 }
 
 // IsMacPresent는 시스템에 해당 MAC을 가진 인터페이스가 존재하는지 여부를 반환합니다.

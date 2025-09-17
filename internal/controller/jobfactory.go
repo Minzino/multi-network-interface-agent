@@ -1,6 +1,7 @@
 package controller
 
 import (
+    "fmt"
     batchv1 "k8s.io/api/batch/v1"
     corev1 "k8s.io/api/core/v1"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,6 +69,15 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
             }},
         })
         mounts = append(mounts, corev1.VolumeMount{Name: "nm-connections", MountPath: "/etc/NetworkManager/system-connections"})
+        // Also mount systemd network directory for .link files (persistent naming)
+        volumes = append(volumes, corev1.Volume{
+            Name: "systemd-network",
+            VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+                Path: "/etc/systemd/network",
+                Type: hostPathType(corev1.HostPathDirectoryOrCreate),
+            }},
+        })
+        mounts = append(mounts, corev1.VolumeMount{Name: "systemd-network", MountPath: "/etc/systemd/network"})
     }
 
     backoffLimit := int32(1)
@@ -77,6 +87,9 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
     if strings.TrimSpace(action) == "" {
         action = "apply"
     }
+
+    // 에이전트 헬스/프로브 포트: 8080 충돌을 피하기 위해 18080 사용
+    const healthPort int32 = 18080
 
     job := &batchv1.Job{
         ObjectMeta: metav1.ObjectMeta{
@@ -118,12 +131,16 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                                 {Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
                                 {Name: "LOG_LEVEL", Value: "info"},
                                 {Name: "POLL_INTERVAL", Value: "30s"},
+                                // Agent health/metrics port override (avoid 8080 conflicts)
+                                {Name: "HEALTH_PORT", Value: fmt.Sprintf("%d", healthPort)},
                                 // optional action: cleanup
                                 {Name: "AGENT_ACTION", Value: p.Action},
                             },
-                            Ports: []corev1.ContainerPort{{Name: "health", ContainerPort: 8080}},
-                            LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(8080)}}, InitialDelaySeconds: 30, PeriodSeconds: 30},
-                            ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(8080)}}, InitialDelaySeconds: 5, PeriodSeconds: 10},
+                            // 주의: hostNetwork=true 환경에서 ContainerPort를 정의하면
+                            // 스케줄러가 호스트 포트 충돌을 검사하여 스케줄링이 실패할 수 있음.
+                            // 프로브는 정수 포트 참조로 동작하므로 ContainerPort 선언 없이 유지합니다.
+                            LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(healthPort)}}, InitialDelaySeconds: 30, PeriodSeconds: 30},
+                            ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(healthPort)}}, InitialDelaySeconds: 5, PeriodSeconds: 10},
                             SecurityContext: &corev1.SecurityContext{Privileged: pointer.Bool(true), Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN", "SYS_ADMIN"}}},
                             VolumeMounts:    mounts,
                         },

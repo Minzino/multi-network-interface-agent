@@ -29,19 +29,6 @@ spec:
           value: "{{ .Values.agent.dataSource }}"
         - name: NODE_CR_NAMESPACE
           value: "{{ .Values.agent.nodeCRNamespace }}"
-        - name: DB_HOST
-          value: "{{ .Values.database.host }}"
-        - name: DB_PORT
-          value: "{{ .Values.database.port }}"
-        - name: DB_USER
-          value: "{{ .Values.database.user }}"
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ include "multinic-agent.fullname" . }}-db
-              key: password
-        - name: DB_NAME
-          value: "{{ .Values.database.name }}"
         - name: POLL_INTERVAL
           value: "{{ .Values.agent.pollInterval }}"
         - name: LOG_LEVEL
@@ -51,7 +38,9 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         - name: HEALTH_PORT
-          value: "{{ .Values.agent.metricsPort | default "8080" }}"
+          value: "{{ .Values.agent.metricsPort | default "18080" }}"
+        - name: PREFLIGHT_ALLOW_UP
+          value: "{{ ternary "true" "false" (.Values.agent.preflightAllowUp | default false) }}"
         - name: MAX_CONCURRENT_TASKS
           value: "{{ .Values.agent.maxConcurrentTasks }}"
         - name: BACKOFF_ENABLED
@@ -60,20 +49,16 @@ spec:
           value: "{{ .Values.agent.backoff.maxInterval }}"
         - name: BACKOFF_MULTIPLIER
           value: "{{ .Values.agent.backoff.multiplier }}"
-        ports:
-        - name: health
-          containerPort: {{ .Values.agent.metricsPort | default 8080 | int }}
-          protocol: TCP
         livenessProbe:
           httpGet:
             path: /
-            port: health
+            port: {{ .Values.agent.metricsPort | default 18080 | int }}
           initialDelaySeconds: 30
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /
-            port: health
+            port: {{ .Values.agent.metricsPort | default 18080 | int }}
           initialDelaySeconds: 5
           periodSeconds: 10
         securityContext:
@@ -85,6 +70,8 @@ spec:
           mountPath: /etc/netplan
         - name: nm-connections
           mountPath: /etc/NetworkManager/system-connections
+        - name: systemd-network
+          mountPath: /etc/systemd/network
         # host-root 마운트 제거 (OS 감지는 Kube API의 Node.status.nodeInfo.osImage 사용)
       volumes:
       - name: netplan
@@ -94,6 +81,10 @@ spec:
       - name: nm-connections
         hostPath:
           path: /etc/NetworkManager/system-connections
+          type: DirectoryOrCreate
+      - name: systemd-network
+        hostPath:
+          path: /etc/systemd/network
           type: DirectoryOrCreate
       # host-root 볼륨 제거
       {{- with .Values.nodeSelector }}

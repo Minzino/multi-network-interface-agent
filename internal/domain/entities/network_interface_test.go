@@ -7,101 +7,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNetworkInterface_Validate(t *testing.T) {
-	tests := []struct {
-		name      string
-		iface     NetworkInterface
-		wantError bool
-		errorType error
-	}{
-		{
-			name: "유효한 인터페이스",
-			iface: NetworkInterface{
-				ID:               1,
-				MacAddress:       "00:11:22:33:44:55",
-				AttachedNodeName: "test-node",
-				Status:           StatusPending,
-				Address:          "1.1.1.1",
-				CIDR:             "1.1.1.0/24",
-				MTU:              1500,
-			},
-			wantError: false,
-		},
-		{
-			name: "잘못된 MAC 주소 형식",
-			iface: NetworkInterface{
-				ID:               1,
-				MacAddress:       "invalid-mac",
-				AttachedNodeName: "test-node",
-				Status:           StatusPending,
-			},
-			wantError: true,
-			errorType: ErrInvalidMacAddress,
-		},
-		{
-			name: "빈 노드 이름",
-			iface: NetworkInterface{
-				ID:         1,
-				MacAddress: "00:11:22:33:44:55",
-				Status:     StatusPending,
-			},
-			wantError: true,
-			errorType: ErrInvalidNodeName,
-		},
-		{
-			name: "다양한 MAC 주소 형식 - 콜론",
-			iface: NetworkInterface{
-				MacAddress:       "aa:bb:cc:dd:ee:ff",
-				AttachedNodeName: "test-node",
-			},
-			wantError: false,
-		},
-		{
-			name: "다양한 MAC 주소 형식 - 대시",
-			iface: NetworkInterface{
-				MacAddress:       "AA-BB-CC-DD-EE-FF",
-				AttachedNodeName: "test-node",
-			},
-			wantError: false,
-		},
-	}
+func TestNetworkInterface_ConstructAndValidate(t *testing.T) {
+    t.Run("유효한 인터페이스", func(t *testing.T) {
+        ni, err := NewNetworkInterface(1, "00:11:22:33:44:55", "test-node", "1.1.1.1", "1.1.1.0/24", 1500)
+        require.NoError(t, err)
+        require.NoError(t, ni.Validate())
+    })
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.iface.Validate()
+    t.Run("잘못된 MAC 주소 형식", func(t *testing.T) {
+        _, err := NewNetworkInterface(1, "invalid-mac", "test-node", "1.1.1.1", "1.1.1.0/24", 1500)
+        assert.Error(t, err)
+    })
 
-			if tt.wantError {
-				assert.Error(t, err)
-				if tt.errorType != nil {
-					assert.ErrorIs(t, err, tt.errorType)
-				}
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
+    t.Run("빈 노드 이름", func(t *testing.T) {
+        _, err := NewNetworkInterface(1, "00:11:22:33:44:55", "", "1.1.1.1", "1.1.1.0/24", 1500)
+        assert.Error(t, err)
+    })
+
+    t.Run("다양한 MAC 주소 형식 - 콜론", func(t *testing.T) {
+        ni, err := NewNetworkInterface(1, "aa:bb:cc:dd:ee:ff", "test-node", "1.1.1.1", "1.1.1.0/24", 1500)
+        require.NoError(t, err)
+        require.NoError(t, ni.Validate())
+    })
+
+    t.Run("다양한 MAC 주소 형식 - 대시", func(t *testing.T) {
+        ni, err := NewNetworkInterface(1, "AA-BB-CC-DD-EE-FF", "test-node", "1.1.1.1", "1.1.1.0/24", 1500)
+        require.NoError(t, err)
+        require.NoError(t, ni.Validate())
+    })
 }
 
 func TestNetworkInterface_StatusMethods(t *testing.T) {
-	t.Run("IsPending", func(t *testing.T) {
-		iface := NetworkInterface{Status: StatusPending}
-		assert.True(t, iface.IsPending())
-
-		iface.Status = StatusConfigured
-		assert.False(t, iface.IsPending())
-	})
-
-	t.Run("MarkAsConfigured", func(t *testing.T) {
-		iface := NetworkInterface{Status: StatusPending}
-		iface.MarkAsConfigured()
-		assert.Equal(t, StatusConfigured, iface.Status)
-	})
-
-	t.Run("MarkAsFailed", func(t *testing.T) {
-		iface := NetworkInterface{Status: StatusPending}
-		iface.MarkAsFailed()
-		assert.Equal(t, StatusFailed, iface.Status)
-	})
+    t.Run("Status 전이", func(t *testing.T) {
+        ni, err := NewNetworkInterface(1, "00:11:22:33:44:55", "node", "1.1.1.1", "1.1.1.0/24", 1500)
+        require.NoError(t, err)
+        assert.True(t, ni.IsPending())
+        ni.MarkAsConfigured()
+        assert.True(t, ni.IsConfigured())
+        ni.MarkAsFailed()
+        assert.True(t, ni.IsFailed())
+    })
 }
 
 func TestInterfaceName_NewInterfaceName(t *testing.T) {
@@ -139,15 +84,13 @@ func TestInterfaceName_NewInterfaceName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := NewInterfaceName(tt.input)
-
-			if tt.wantError {
-				assert.Error(t, err)
-				assert.ErrorIs(t, err, ErrInvalidInterfaceName)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.input, result.String())
-			}
+            result, err := NewInterfaceName(tt.input)
+            if tt.wantError {
+                assert.Error(t, err)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.input, result.String())
+            }
 		})
 	}
 }

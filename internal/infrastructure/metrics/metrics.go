@@ -72,6 +72,56 @@ var (
 		},
 	)
 
+	// 워커풀 메트릭 (Phase 2)
+	WorkerQueueDepth = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_queue_depth",
+			Help: "Current queued jobs in worker pool",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerActive = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_active",
+			Help: "Number of active workers processing jobs",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerUtilization = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "multinic_worker_utilization",
+			Help: "Worker utilization ratio (active/total)",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerTaskDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "multinic_worker_task_duration_seconds",
+			Help:    "Task processing duration per worker pool",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"pool", "status"}, // status: success, failed, panic, retried
+	)
+
+	WorkerRetries = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "multinic_worker_task_retries_total",
+			Help: "Total number of task retries",
+		},
+		[]string{"pool"},
+	)
+
+	WorkerPanics = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "multinic_worker_panics_total",
+			Help: "Total number of panics recovered in workers",
+		},
+		[]string{"pool"},
+	)
+
 	// 드리프트 감지 메트릭
 	ConfigurationDrifts = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -106,6 +156,39 @@ var (
 		},
 		[]string{"version", "os_type", "node_name"},
 	)
+
+	// 라우팅 직렬화 메트릭 (Phase 2)
+	RoutingLockWaitDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "multinic_routing_lock_wait_duration_seconds",
+			Help:    "Time spent waiting for routing lock",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	RoutingOperationDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "multinic_routing_operation_duration_seconds",
+			Help:    "Time spent executing routing operations",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+    RoutingOperationFailures = promauto.NewCounter(
+        prometheus.CounterOpts{
+            Name: "multinic_routing_operation_failures_total",
+            Help: "Total number of routing operation failures",
+        },
+    )
+
+    // Preflight blocks (visibility for safety gate)
+    PreflightUpBlockTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "multinic_preflight_up_block_total",
+            Help: "Total number of preflight blocks for UP interfaces by reason",
+        },
+        []string{"reason"}, // has_ipv4, has_routes, default_route, enslaved
+    )
 )
 
 // RecordInterfaceProcessing은 인터페이스 처리 시간을 기록합니다
@@ -137,7 +220,31 @@ func RecordDrift(driftType string) {
 
 // SetConcurrentTasks는 현재 동시 처리 중인 작업 수를 설정합니다
 func SetConcurrentTasks(count float64) {
-	ConcurrentTasks.Set(count)
+		ConcurrentTasks.Set(count)
+}
+
+// Worker 메트릭: 편의 헬퍼
+func SetWorkerQueueDepth(pool string, depth int) {
+    WorkerQueueDepth.WithLabelValues(pool).Set(float64(depth))
+}
+
+func SetWorkerActive(pool string, active, total int) {
+    WorkerActive.WithLabelValues(pool).Set(float64(active))
+    if total > 0 {
+        WorkerUtilization.WithLabelValues(pool).Set(float64(active) / float64(total))
+    }
+}
+
+func ObserveWorkerTask(pool, status string, durationSeconds float64) {
+    WorkerTaskDuration.WithLabelValues(pool, status).Observe(durationSeconds)
+}
+
+func IncWorkerRetry(pool string) {
+    WorkerRetries.WithLabelValues(pool).Inc()
+}
+
+func IncWorkerPanic(pool string) {
+    WorkerPanics.WithLabelValues(pool).Inc()
 }
 
 // SetBackoffLevel은 현재 백오프 레벨을 설정합니다
@@ -157,4 +264,24 @@ func SetDBConnectionStatus(connected bool) {
 // SetAgentInfo는 에이전트 정보를 설정합니다
 func SetAgentInfo(version, osType, nodeName string) {
 	AgentInfo.WithLabelValues(version, osType, nodeName).Set(1)
+}
+
+// ObserveRoutingLockWaitDuration는 라우팅 락 대기 시간을 기록합니다
+func ObserveRoutingLockWaitDuration(duration float64) {
+	RoutingLockWaitDuration.Observe(duration)
+}
+
+// ObserveRoutingOperationDuration는 라우팅 작업 실행 시간을 기록합니다
+func ObserveRoutingOperationDuration(duration float64) {
+	RoutingOperationDuration.Observe(duration)
+}
+
+// IncRoutingOperationFailures는 라우팅 작업 실패 카운터를 증가시킵니다
+func IncRoutingOperationFailures() {
+    RoutingOperationFailures.Inc()
+}
+
+// IncPreflightUpBlock increments preflight block counter per reason
+func IncPreflightUpBlock(reason string) {
+    PreflightUpBlockTotal.WithLabelValues(reason).Inc()
 }

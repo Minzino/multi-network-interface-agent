@@ -13,6 +13,7 @@ import (
 
 	"multinic-agent/internal/application/polling"
 	"multinic-agent/internal/application/usecases"
+	"multinic-agent/internal/domain/constants"
 	"multinic-agent/internal/domain/interfaces"
 	"multinic-agent/internal/infrastructure/config"
 	"multinic-agent/internal/infrastructure/container"
@@ -137,11 +138,11 @@ func (a *Application) Run() error {
 	}
 
 	// RUN_MODE=job: 한 번 처리 후 종료
-	if cfg.Agent.RunMode == "job" {
+	if constants.RunMode(cfg.Agent.RunMode) == constants.RunModeJob {
 		a.logger.Info("MultiNIC agent started (run mode: job)")
 		// optional cleanup action
-		action := os.Getenv("AGENT_ACTION")
-		if strings.EqualFold(action, "cleanup") {
+		action := constants.AgentAction(os.Getenv("AGENT_ACTION"))
+		if action == constants.AgentActionCleanup {
 			// 실행: 삭제 유스케이스만 수행
 			deleteInput := usecases.DeleteNetworkInput{NodeName: hostname}
 			if _, err := a.deleteUseCase.Execute(ctx, deleteInput); err != nil {
@@ -307,7 +308,7 @@ func (a *Application) processNetworkConfigurations(ctx context.Context) error {
 		}
 		if b, err := json.Marshal(summary); err == nil {
 			// Kubernetes는 /dev/termination-log 내용을 컨테이너 종료 메시지로 노출
-			_ = os.WriteFile("/dev/termination-log", b, 0644)
+			_ = os.WriteFile(constants.KubernetesTerminationLogPath, b, constants.ConfigFilePermission)
 		} else {
 			a.logger.WithError(err).Warn("Failed to marshal termination summary JSON")
 		}

@@ -1,0 +1,51 @@
+{
+  "title": "MultiNIC Worker Pool",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Queue Depth",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "multinic_worker_queue_depth{pool=\"configure\"}", "legendFormat": "queue"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Active Workers",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "multinic_worker_active{pool=\"configure\"}", "legendFormat": "active"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Utilization",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {"expr": "multinic_worker_utilization{pool=\"configure\"}", "legendFormat": "util"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit"}}
+    },
+    {
+      "type": "timeseries",
+      "title": "Task Duration p50/p90/p99",
+      "gridPos": {"x": 0, "y": 4, "w": 18, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.5, sum by (le) (rate(multinic_worker_task_duration_seconds_bucket{pool=\"configure\"}[5m])))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.9, sum by (le) (rate(multinic_worker_task_duration_seconds_bucket{pool=\"configure\"}[5m])))", "legendFormat": "p90"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(multinic_worker_task_duration_seconds_bucket{pool=\"configure\"}[5m])))", "legendFormat": "p99"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retries / Panics (5m)",
+      "gridPos": {"x": 0, "y": 12, "w": 18, "h": 8},
+      "targets": [
+        {"expr": "rate(multinic_worker_task_retries_total{pool=\"configure\"}[5m])", "legendFormat": "retries/s"},
+        {"expr": "rate(multinic_worker_panics_total{pool=\"configure\"}[5m])", "legendFormat": "panics/s"}
+      ]
+    }
+  ]
+}
+

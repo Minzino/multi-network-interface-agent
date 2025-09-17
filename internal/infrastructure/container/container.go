@@ -32,9 +32,11 @@ type Container struct {
 	osDetector      interfaces.OSDetector
 
 	// 서비스들
-	healthService  *health.HealthService
-	namingService  *services.InterfaceNamingService
-	networkFactory *network.NetworkManagerFactory
+	healthService      *health.HealthService
+    namingService      *services.InterfaceNamingService
+    driftDetector      *services.DriftDetector
+    routingCoordinator *services.RoutingCoordinator
+    networkFactory     *network.NetworkManagerFactory
 
 	// 레포지토리
 	repository interfaces.NetworkInterfaceRepository
@@ -143,8 +145,14 @@ func (c *Container) initializeServices() error {
 	// 헬스 서비스
 	c.healthService = health.NewHealthService(c.clock, c.logger)
 
-	// 인터페이스 네이밍 서비스
-	c.namingService = services.NewInterfaceNamingService(c.fileSystem, c.commandExecutor)
+    // 인터페이스 네이밍 서비스
+    c.namingService = services.NewInterfaceNamingService(c.fileSystem, c.commandExecutor)
+
+    // 드리프트 디텍터 서비스
+    c.driftDetector = services.NewDriftDetector(c.fileSystem, c.logger, c.namingService)
+
+    // 라우팅 코디네이터 서비스
+    c.routingCoordinator = services.NewRoutingCoordinator(c.logger)
 
 	// 네트워크 관리자 팩토리
 	c.networkFactory = network.NewNetworkManagerFactory(
@@ -172,16 +180,20 @@ func (c *Container) initializeUseCases() error {
 	}
 
 	// 네트워크 설정 유스케이스
-	c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCase(
-		c.repository,
-		configurer,
-		rollbacker,
-		c.namingService,
-		c.fileSystem,
-		c.osDetector,
-		c.logger,
-		c.config.Agent.MaxConcurrentTasks,
-	)
+    c.configureNetworkUseCase = usecases.NewConfigureNetworkUseCaseWithDetector(
+        c.repository,
+        configurer,
+        rollbacker,
+        c.namingService,
+        c.fileSystem,
+        c.osDetector,
+        c.logger,
+        c.config.Agent.MaxConcurrentTasks,
+        c.driftDetector,
+        c.config.Agent.CommandTimeout,
+        c.config.Agent.MaxRetries,
+        c.config.Agent.Backoff.Multiplier,
+    )
 
 	// 네트워크 삭제 유스케이스
 	c.deleteNetworkUseCase = usecases.NewDeleteNetworkUseCase(
@@ -225,6 +237,11 @@ func (c *Container) GetDeleteNetworkUseCase() *usecases.DeleteNetworkUseCase {
 // GetOSDetector는 OS 감지기를 반환합니다
 func (c *Container) GetOSDetector() interfaces.OSDetector {
 	return c.osDetector
+}
+
+// GetRoutingCoordinator는 라우팅 코디네이터를 반환합니다
+func (c *Container) GetRoutingCoordinator() *services.RoutingCoordinator {
+	return c.routingCoordinator
 }
 
 // Close는 컨테이너를 정리합니다

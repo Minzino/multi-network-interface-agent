@@ -1,14 +1,14 @@
 package persistence
 
 import (
-	"context"
-	"database/sql"
-	"fmt"
-	"multinic-agent/internal/domain/entities"
-	"multinic-agent/internal/domain/errors"
-	"multinic-agent/internal/domain/interfaces"
-	"multinic-agent/internal/infrastructure/metrics"
-	"time"
+    "context"
+    "database/sql"
+    "fmt"
+    "multinic-agent/internal/domain/entities"
+    "multinic-agent/internal/domain/errors"
+    "multinic-agent/internal/domain/interfaces"
+    "multinic-agent/internal/infrastructure/metrics"
+    "time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/sirupsen/logrus"
@@ -51,40 +51,38 @@ func (r *MySQLRepository) GetPendingInterfaces(ctx context.Context, nodeName str
 	}
 	defer rows.Close()
 
-	var interfaces []entities.NetworkInterface
+    var interfaces []entities.NetworkInterface
 
-	for rows.Next() {
-		var iface entities.NetworkInterface
-		var netplanSuccess int
-		var address, cidr sql.NullString
-		var mtu sql.NullInt64
+    for rows.Next() {
+        var (
+            id int
+            mac, node string
+            netplanSuccess int
+            addr, cidr sql.NullString
+            mtu sql.NullInt64
+        )
 
-		err := rows.Scan(
-			&iface.ID,
-			&iface.MacAddress,
-			&iface.AttachedNodeName,
-			&netplanSuccess,
-			&address,
-			&mtu,
-			&cidr,
-		)
-		if err != nil {
-			r.logger.WithError(err).Error("failed to scan row")
-			continue
-		}
+        err := rows.Scan(&id, &mac, &node, &netplanSuccess, &addr, &mtu, &cidr)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to scan row")
+            continue
+        }
 
-		iface.Status = entities.StatusPending
-		if address.Valid {
-			iface.Address = address.String
-		}
-		if mtu.Valid {
-			iface.MTU = int(mtu.Int64)
-		}
-		if cidr.Valid {
-			iface.CIDR = cidr.String
-		}
-		interfaces = append(interfaces, iface)
-	}
+        address := ""
+        if addr.Valid { address = addr.String }
+        cidrStr := ""
+        if cidr.Valid { cidrStr = cidr.String }
+        mtuVal := 0
+        if mtu.Valid { mtuVal = int(mtu.Int64) }
+
+        ni, err := entities.NewNetworkInterface(id, mac, node, address, cidrStr, mtuVal)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to build entity from row")
+            continue
+        }
+        // pending by default
+        interfaces = append(interfaces, *ni)
+    }
 
 	if err = rows.Err(); err != nil {
 		return nil, errors.NewSystemError("error processing results", err)
@@ -109,40 +107,36 @@ func (r *MySQLRepository) GetConfiguredInterfaces(ctx context.Context, nodeName 
 	}
 	defer rows.Close()
 
-	var interfaces []entities.NetworkInterface
+    var interfaces []entities.NetworkInterface
 
-	for rows.Next() {
-		var iface entities.NetworkInterface
-		var netplanSuccess int
-		var address, cidr sql.NullString
-		var mtu sql.NullInt64
+    for rows.Next() {
+        var (
+            id int
+            mac, node string
+            netplanSuccess int
+            addr, cidr sql.NullString
+            mtu sql.NullInt64
+        )
+        err := rows.Scan(&id, &mac, &node, &netplanSuccess, &addr, &mtu, &cidr)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to scan row")
+            continue
+        }
+        address := ""
+        if addr.Valid { address = addr.String }
+        cidrStr := ""
+        if cidr.Valid { cidrStr = cidr.String }
+        mtuVal := 0
+        if mtu.Valid { mtuVal = int(mtu.Int64) }
 
-		err := rows.Scan(
-			&iface.ID,
-			&iface.MacAddress,
-			&iface.AttachedNodeName,
-			&netplanSuccess,
-			&address,
-			&mtu,
-			&cidr,
-		)
-		if err != nil {
-			r.logger.WithError(err).Error("failed to scan row")
-			continue
-		}
-
-		iface.Status = entities.StatusConfigured
-		if address.Valid {
-			iface.Address = address.String
-		}
-		if mtu.Valid {
-			iface.MTU = int(mtu.Int64)
-		}
-		if cidr.Valid {
-			iface.CIDR = cidr.String
-		}
-		interfaces = append(interfaces, iface)
-	}
+        ni, err := entities.NewNetworkInterface(id, mac, node, address, cidrStr, mtuVal)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to build entity from row")
+            continue
+        }
+        ni.MarkAsConfigured()
+        interfaces = append(interfaces, *ni)
+    }
 
 	if err = rows.Err(); err != nil {
 		return nil, errors.NewSystemError("error processing results", err)
@@ -200,20 +194,15 @@ func (r *MySQLRepository) GetInterfaceByID(ctx context.Context, id int) (*entiti
 		WHERE mi.id = ?
 	`
 
-	var iface entities.NetworkInterface
-	var netplanSuccess int
-	var address, cidr sql.NullString
-	var mtu sql.NullInt64
+    var (
+        dbID int
+        mac, node string
+        netplanSuccess int
+        address, cidr sql.NullString
+        mtu sql.NullInt64
+    )
 
-	err := r.db.QueryRowContext(ctx, query, id).Scan(
-		&iface.ID,
-		&iface.MacAddress,
-		&iface.AttachedNodeName,
-		&netplanSuccess,
-		&address,
-		&mtu,
-		&cidr,
-	)
+    err := r.db.QueryRowContext(ctx, query, id).Scan(&dbID, &mac, &node, &netplanSuccess, &address, &mtu, &cidr)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.NewNotFoundError(fmt.Sprintf("interface not found: ID=%d", id))
@@ -222,25 +211,21 @@ func (r *MySQLRepository) GetInterfaceByID(ctx context.Context, id int) (*entiti
 		return nil, errors.NewSystemError("database query failed", err)
 	}
 
-	if address.Valid {
-		iface.Address = address.String
-	}
-	if mtu.Valid {
-		iface.MTU = int(mtu.Int64)
-	}
-	if cidr.Valid {
-		iface.CIDR = cidr.String
-	}
+    addrStr := ""
+    if address.Valid { addrStr = address.String }
+    cidrStr := ""
+    if cidr.Valid { cidrStr = cidr.String }
+    mtuVal := 0
+    if mtu.Valid { mtuVal = int(mtu.Int64) }
 
-	// Status mapping
-	switch netplanSuccess {
-	case 1:
-		iface.Status = entities.StatusConfigured
-	default:
-		iface.Status = entities.StatusPending
-	}
-
-	return &iface, nil
+    ni, err := entities.NewNetworkInterface(dbID, mac, node, addrStr, cidrStr, mtuVal)
+    if err != nil {
+        return nil, err
+    }
+    if netplanSuccess == 1 {
+        ni.MarkAsConfigured()
+    }
+    return ni, nil
 }
 
 // GetActiveInterfaces retrieves active interfaces for a specific node (for deletion detection)
@@ -258,48 +243,38 @@ func (r *MySQLRepository) GetActiveInterfaces(ctx context.Context, nodeName stri
 	}
 	defer rows.Close()
 
-	var interfaces []entities.NetworkInterface
+    var interfaces []entities.NetworkInterface
 
-	for rows.Next() {
-		var iface entities.NetworkInterface
-		var netplanSuccess int
-		var address, cidr sql.NullString
-		var mtu sql.NullInt64
+    for rows.Next() {
+        var (
+            id int
+            mac, node string
+            netplanSuccess int
+            address, cidr sql.NullString
+            mtu sql.NullInt64
+        )
+        err := rows.Scan(&id, &mac, &node, &netplanSuccess, &address, &mtu, &cidr)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to scan row")
+            continue
+        }
+        addrStr := ""
+        if address.Valid { addrStr = address.String }
+        cidrStr := ""
+        if cidr.Valid { cidrStr = cidr.String }
+        mtuVal := 0
+        if mtu.Valid { mtuVal = int(mtu.Int64) }
 
-		err := rows.Scan(
-			&iface.ID,
-			&iface.MacAddress,
-			&iface.AttachedNodeName,
-			&netplanSuccess,
-			&address,
-			&mtu,
-			&cidr,
-		)
-		if err != nil {
-			r.logger.WithError(err).Error("failed to scan row")
-			continue
-		}
-
-		if address.Valid {
-			iface.Address = address.String
-		}
-		if mtu.Valid {
-			iface.MTU = int(mtu.Int64)
-		}
-		if cidr.Valid {
-			iface.CIDR = cidr.String
-		}
-
-		// Status mapping
-		switch netplanSuccess {
-		case 1:
-			iface.Status = entities.StatusConfigured
-		default:
-			iface.Status = entities.StatusPending
-		}
-
-		interfaces = append(interfaces, iface)
-	}
+        ni, err := entities.NewNetworkInterface(id, mac, node, addrStr, cidrStr, mtuVal)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to build entity from row")
+            continue
+        }
+        if netplanSuccess == 1 {
+            ni.MarkAsConfigured()
+        }
+        interfaces = append(interfaces, *ni)
+    }
 
 	if err = rows.Err(); err != nil {
 		return nil, errors.NewSystemError("error processing results", err)
@@ -323,48 +298,38 @@ func (r *MySQLRepository) GetAllNodeInterfaces(ctx context.Context, nodeName str
 	}
 	defer rows.Close()
 
-	var interfaces []entities.NetworkInterface
+    var interfaces []entities.NetworkInterface
 
-	for rows.Next() {
-		var iface entities.NetworkInterface
-		var netplanSuccess int
-		var address, cidr sql.NullString
-		var mtu sql.NullInt64
+    for rows.Next() {
+        var (
+            id int
+            mac, node string
+            netplanSuccess int
+            address, cidr sql.NullString
+            mtu sql.NullInt64
+        )
+        err := rows.Scan(&id, &mac, &node, &netplanSuccess, &address, &mtu, &cidr)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to scan row")
+            continue
+        }
+        addrStr := ""
+        if address.Valid { addrStr = address.String }
+        cidrStr := ""
+        if cidr.Valid { cidrStr = cidr.String }
+        mtuVal := 0
+        if mtu.Valid { mtuVal = int(mtu.Int64) }
 
-		err := rows.Scan(
-			&iface.ID,
-			&iface.MacAddress,
-			&iface.AttachedNodeName,
-			&netplanSuccess,
-			&address,
-			&mtu,
-			&cidr,
-		)
-		if err != nil {
-			r.logger.WithError(err).Error("failed to scan row")
-			continue
-		}
-
-		if address.Valid {
-			iface.Address = address.String
-		}
-		if mtu.Valid {
-			iface.MTU = int(mtu.Int64)
-		}
-		if cidr.Valid {
-			iface.CIDR = cidr.String
-		}
-
-		// Status mapping
-		switch netplanSuccess {
-		case 1:
-			iface.Status = entities.StatusConfigured
-		default:
-			iface.Status = entities.StatusPending
-		}
-
-		interfaces = append(interfaces, iface)
-	}
+        ni, err := entities.NewNetworkInterface(id, mac, node, addrStr, cidrStr, mtuVal)
+        if err != nil {
+            r.logger.WithError(err).Error("failed to build entity from row")
+            continue
+        }
+        if netplanSuccess == 1 {
+            ni.MarkAsConfigured()
+        }
+        interfaces = append(interfaces, *ni)
+    }
 
 	if err = rows.Err(); err != nil {
 		return nil, errors.NewSystemError("error processing results", err)

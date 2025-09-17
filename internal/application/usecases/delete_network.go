@@ -30,12 +30,13 @@ type DeleteNetworkOutput struct {
 
 // DeleteNetworkUseCase는 고아 인터페이스를 감지하고 삭제하는 유스케이스입니다
 type DeleteNetworkUseCase struct {
-	osDetector    interfaces.OSDetector
-	rollbacker    interfaces.NetworkRollbacker
-	namingService *services.InterfaceNamingService
-	repository    interfaces.NetworkInterfaceRepository
-	fileSystem    interfaces.FileSystem
-	logger        *logrus.Logger
+	osDetector         interfaces.OSDetector
+	rollbacker         interfaces.NetworkRollbacker
+	namingService      *services.InterfaceNamingService
+	repository         interfaces.NetworkInterfaceRepository
+	fileSystem         interfaces.FileSystem
+	logger             *logrus.Logger
+	routingCoordinator *services.RoutingCoordinator // 라우팅 전역 직렬화
 }
 
 // NewDeleteNetworkUseCase는 새로운 DeleteNetworkUseCase를 생성합니다
@@ -48,12 +49,13 @@ func NewDeleteNetworkUseCase(
 	logger *logrus.Logger,
 ) *DeleteNetworkUseCase {
 	return &DeleteNetworkUseCase{
-		osDetector:    osDetector,
-		rollbacker:    rollbacker,
-		namingService: namingService,
-		repository:    repository,
-		fileSystem:    fileSystem,
-		logger:        logger,
+		osDetector:         osDetector,
+		rollbacker:         rollbacker,
+		namingService:      namingService,
+		repository:         repository,
+		fileSystem:         fileSystem,
+		logger:             logger,
+		routingCoordinator: services.NewRoutingCoordinator(logger), // 라우팅 코디네이터 초기화
 	}
 }
 
@@ -140,11 +142,18 @@ func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input D
 	// ifcfg 파일 디렉토리
 	ifcfgDir := "/etc/sysconfig/network-scripts"
 
-	// 디렉토리의 파일 목록 가져오기
-	files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
-	}
+    // 디렉토리의 파일 목록 가져오기 (RHEL9+ 환경에서는 디렉토리가 없을 수 있음 → 비치명적으로 취급)
+    files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
+    if err != nil {
+        // 디렉토리 부재는 정상 시나리오로 간주하고 조용히 종료
+        if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file or directory") {
+            uc.logger.WithField("dir", ifcfgDir).Info("ifcfg directory not present - skipping full cleanup")
+            // 추가: 시스템에 남아있는 multinicX 인터페이스 이름 정리 (DOWN 상태만 대상)
+            uc.cleanupMultinicInterfaceNames(ctx)
+            return output, nil
+        }
+        return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
+    }
 
 	// 고아 파일 찾기
 	orphanedFiles, err := uc.findOrphanedIfcfgFiles(ctx, files, ifcfgDir)
@@ -210,7 +219,7 @@ func (uc *DeleteNetworkUseCase) findOrphanedNetplanFiles(ctx context.Context) ([
 	// MAC 주소 맵 생성 (빠른 조회를 위해)
 	activeMACAddresses := make(map[string]bool)
 	for _, iface := range activeInterfaces {
-		activeMACAddresses[strings.ToLower(iface.MacAddress)] = true
+		activeMACAddresses[strings.ToLower(iface.MacAddress())] = true
 	}
 
 	for _, fileName := range files {
@@ -354,7 +363,7 @@ func (uc *DeleteNetworkUseCase) findOrphanedIfcfgFiles(ctx context.Context, file
 	activeMACAddresses := make(map[string]bool)
 	var activeMACList []string
 	for _, iface := range activeInterfaces {
-		macLower := strings.ToLower(iface.MacAddress)
+		macLower := strings.ToLower(iface.MacAddress())
 		activeMACAddresses[macLower] = true
 		activeMACList = append(activeMACList, macLower)
 	}
