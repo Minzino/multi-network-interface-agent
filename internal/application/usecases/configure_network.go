@@ -9,6 +9,7 @@ import (
     "multinic-agent/internal/domain/services"
     domconst "multinic-agent/internal/domain/constants"
     "multinic-agent/internal/infrastructure/metrics"
+    "os"
     "strings"
     "sync"
     "sync/atomic"
@@ -270,15 +271,84 @@ func (uc *ConfigureNetworkUseCase) Execute(ctx context.Context, input ConfigureN
 func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface entities.NetworkInterface) error {
     // 1) MAC presence
     foundName, err := uc.namingService.FindInterfaceNameByMAC(iface.MacAddress())
-    // Block when MAC is not present or lookup failed to ensure safety (avoid apply+rollback link flaps)
     if err != nil || strings.TrimSpace(foundName) == "" {
         return errors.NewValidationError("preflight: MAC not present on system", err)
     }
-    // Default: block if interface is UP. Allow existing multinic* during tests/roll-forward scenarios.
-    if !strings.HasPrefix(foundName, "multinic") && uc.isInterfaceUp(ctx, foundName) {
-        return errors.NewValidationError("preflight: target interface is UP", fmt.Errorf("interface %s is up", foundName))
+    // multinic*는 재처리 허용
+    if strings.HasPrefix(foundName, "multinic") {
+        return nil
     }
+    // 2) UP인 경우만 추가 검사 (DOWN이면 안전)
+    if !uc.isInterfaceUp(ctx, foundName) {
+        return nil
+    }
+    // 운영 우회 옵션: 명시적 허용
+    if uc.envBool("PREFLIGHT_ALLOW_UP") {
+        return nil
+    }
+    // 3) 사용 신호 판별: IPv4/라우트/기본경로/소속 여부
+    hasIPv4 := uc.hasGlobalIPv4(foundName)
+    enslaved := uc.isEnslaved(foundName)
+    hasRoute, defaultOn := uc.hasRoutesForIface(foundName)
+    if hasIPv4 || enslaved || hasRoute || defaultOn {
+        reason := []string{}
+        if hasIPv4 { reason = append(reason, "has_ipv4") }
+        if enslaved { reason = append(reason, "enslaved") }
+        if hasRoute { reason = append(reason, "has_routes") }
+        if defaultOn { reason = append(reason, "default_route") }
+        return errors.NewValidationError(
+            fmt.Sprintf("preflight: target interface in use (%s)", strings.Join(reason, ",")),
+            fmt.Errorf("interface %s considered in-use", foundName),
+        )
+    }
+    // 4) 여기까지 오면 UP이지만 미사용으로 간주 → 진행 허용
     return nil
+}
+
+// envBool reads an environment variable as boolean (true if parses to true/1/yes/on)
+func (uc *ConfigureNetworkUseCase) envBool(key string) bool {
+    v := strings.TrimSpace(os.Getenv(key))
+    if v == "" { return false }
+    switch strings.ToLower(v) {
+    case "1", "true", "yes", "on":
+        return true
+    default:
+        return false
+    }
+}
+
+// hasGlobalIPv4 returns true if the interface has a global-scope IPv4 address assigned
+func (uc *ConfigureNetworkUseCase) hasGlobalIPv4(ifName string) bool {
+    if ipWithPrefix, err := uc.namingService.GetIPv4WithPrefix(ifName); err == nil && strings.TrimSpace(ipWithPrefix) != "" {
+        return true
+    }
+    return false
+}
+
+// isEnslaved returns true if the interface is a slave of bridge/bond/team (master exists)
+func (uc *ConfigureNetworkUseCase) isEnslaved(ifName string) bool {
+    path := fmt.Sprintf("/sys/class/net/%s/master", ifName)
+    return uc.fileSystem.Exists(path)
+}
+
+// hasRoutesForIface parses /proc/net/route to see if any routes or default route are bound to the interface
+func (uc *ConfigureNetworkUseCase) hasRoutesForIface(ifName string) (hasAny bool, defaultOn bool) {
+    data, err := uc.fileSystem.ReadFile("/proc/net/route")
+    if err != nil { return false, false }
+    lines := strings.Split(string(data), "\n")
+    for i, line := range lines {
+        if i == 0 || strings.TrimSpace(line) == "" { continue }
+        fields := strings.Fields(line)
+        if len(fields) < 11 { continue }
+        iface := fields[0]
+        dest := fields[1]
+        if iface != ifName { continue }
+        hasAny = true
+        if strings.EqualFold(dest, "00000000") {
+            defaultOn = true
+        }
+    }
+    return
 }
 
 // retryPolicy는 도메인 에러 타입에 따라 재시도 여부와 백오프를 결정합니다.
