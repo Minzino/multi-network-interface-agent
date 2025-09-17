@@ -35,6 +35,7 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 ```mermaid
 flowchart TB
   EXT[Config Source and Operator]
+  EXTAPI[External API]
 
   subgraph K8s_Cluster[Kubernetes Cluster]
     subgraph Control_Plane[Control Plane]
@@ -61,6 +62,7 @@ flowchart TB
   end
 
   EXT --> CR
+  EXTAPI --> CR
   CR -.watch.-> CTL
   CTL -->|schedule job| JOB
   VAL -->|termination log| CTL
@@ -78,6 +80,7 @@ sequenceDiagram
     participant 노드 as Target Node
 
     운영->>API: CR 생성/수정 (MAC, IP, CIDR, MTU)
+    note over 운영,API: 외부 API도 CR을 직접 생성/갱신할 수 있음
     API-->>컨트롤러: Watch 이벤트 전달
     컨트롤러->>API: 노드 정보 조회(osImage/SystemUUID)
     컨트롤러->>API: Agent Job 생성(nodeSelector)
@@ -92,6 +95,16 @@ sequenceDiagram
     컨트롤러->>API: CR 상태 업데이트(Configured/Failed)
     컨트롤러->>API: Job 정리(TTL)
 ```
+
+설명(한글)
+- 외부 API(예: OpenStack 연동 서비스, CMDB 싱크러) 또는 운영자가 노드별 인터페이스 정보(MAC, IP, CIDR, MTU)를 포함한 MultiNicNodeConfig CR을 생성/갱신한다.
+- Controller는 CR 변경을 Watch로 감지하고, 대상 노드 정보를 확인한 뒤 해당 노드에 Agent Job을 스케줄한다.
+- Job은 노드에서 Preflight를 수행한다. 인터페이스가 UP이어도 IPv4/라우트/마스터 소속이 없으면 “미사용”으로 간주하여 진행한다.
+- ip 명령어로 즉시 적용한다(이름 변경, MTU, IPv4, 라우트). 이 단계에서 netplan/nmcli 즉시 적용은 호출하지 않는다.
+- OS별 영속 파일만 작성한다( persist-only ).
+  - Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name 포함)
+  - RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection
+- 검증 후 결과 요약을 termination log로 남기면, Controller가 이를 읽어 CR status를 Configured/Failed로 갱신하고 Job을 정리한다.
 
 ## Agent Job 동작 및 안정성
 
