@@ -34,93 +34,57 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 
 ```mermaid
 graph TB
-    External[External System<br/>OpenStack 모니터링]
+    External[Config Source / Operator]
 
 subgraph "Kubernetes Cluster"
-subgraph "CR 처리"
-MultiNICController[MultiNIC Controller<br/>CR Watch]
-NodeCR[MultiNicNodeConfig CR<br/>노드별 Interface 데이터]
+  subgraph "Control Plane"
+    Controller[MultiNIC Controller (CR Watch)]
+    CR[MultiNicNodeConfig CR]
+  end
+  subgraph "Nodes"
+    AgentJob[Agent Job (node-selected)]
+  end
 end
 
-subgraph "Job 실행"
-Job1[Agent Job<br/>Worker01 처리]
-Job2[Agent Job<br/>Worker02 처리]
-Job3[Agent Job<br/>Worker03 처리]
+subgraph "Node Runtime (per target node)"
+  Preflight[Preflight checks\n- MAC present\n- UP-but-unused allowed]
+  RuntimeIP[ip runtime apply\n- link rename\n- MTU\n- IPv4\n- route]
+  Persist[Persist-only files\n- Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name)\n- RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection\n- no immediate reload]
+  Validate[Validation + summary]
 end
 
-subgraph "Worker Nodes"
-Node1[Worker01<br/>SystemUUID: b4975c5f-50bb]
-Node2[Worker02<br/>SystemUUID: d4defd76-faa9]
-Node3[Worker03<br/>SystemUUID: a1b2c3d4-e5f6]
-end
-end
-
-subgraph "Network Interfaces"
-NIC1[Worker01: multinic0, multinic1]
-NIC2[Worker02: multinic0]
-NIC3[Worker03: multinic0, multinic1, multinic2]
-end
-
-%% 데이터 흐름
-External -->|① CR 생성<br/>노드별 설정| NodeCR
-NodeCR -.->|② Watch Event<br/>실시간 감지| MultiNICController
-MultiNICController -->|③ Node별 Job 스케줄링| Job1
-MultiNICController -->|③ Node별 Job 스케줄링| Job2
-MultiNICController -->|③ Node별 Job 스케줄링| Job3
-Job1 -->|④ 네트워크 구성| Node1
-Job2 -->|④ 네트워크 구성| Node2
-Job3 -->|④ 네트워크 구성| Node3
-Node1 -->|⑤ 인터페이스 생성| NIC1
-Node2 -->|⑤ 인터페이스 생성| NIC2
-Node3 -->|⑤ 인터페이스 생성| NIC3
-
-%% 스타일링
-classDef external fill:#e8f5e8
-classDef controller fill:#f3e5f5
-classDef cr fill:#fff3e0
-classDef job fill:#ffecb3
-classDef node fill:#fafafa
-classDef nic fill:#ffcdd2
-
-class External external
-class MultiNICController controller
-class NodeCR cr
-class Job1,Job2,Job3 job
-class Node1,Node2,Node3 node
-class NIC1,NIC2,NIC3 nic
+External --> CR
+CR -.Watch.-> Controller
+Controller -->|schedule job| AgentJob
+AgentJob --> Preflight --> RuntimeIP --> Persist --> Validate
+Validate -->|termination summary| Controller
+Controller -->|status update| CR
 ```
 
 ### 처리 워크플로우
 
 ```mermaid
 sequenceDiagram
-    participant External as External System
-    participant K8s as Kubernetes API
-    participant Controller as MultiNIC Controller
+    participant Operator as Config Source
+    participant API as Kubernetes API
+    participant Ctl as Controller
     participant Job as Agent Job
-    participant Node as Worker Node
+    participant Node as Target Node
 
-    Note over External: CR 생성
-    External->>K8s: MultiNicNodeConfig CR 생성
+    Operator->>API: Create/Update MultiNicNodeConfig
+    API-->>Ctl: Watch event (CR change)
+    Ctl->>API: Get Node osImage/SystemUUID
+    Ctl->>API: Create Job (nodeSelector by hostname)
 
-    Note over Controller: 실시간 감지
-    K8s-->>Controller: Watch Event<br/>(CR 변경 감지)
-    Controller->>Controller: Instance ID → SystemUUID 매핑
+    API->>Job: Start pod on target node
+    Job->>Node: Preflight (MAC present, UP-but-unused allowed)
+    Job->>Node: Runtime apply via ip (rename, MTU, IPv4, route)
+    Job->>Node: Persist-only files (Ubuntu netplan / RHEL .link + .nmconnection)
+    Job->>Node: Validate and write termination summary
 
-    Note over Job: Job 스케줄링
-    Controller->>K8s: Node SystemUUID 조회
-    Controller->>K8s: Agent Job 생성<br/>(nodeSelector 적용)
-
-    Note over Node: 네트워크 구성
-    K8s->>Job: Job 실행 (타겟 노드)
-    Job->>Node: 고아 인터페이스 정리
-    Job->>Node: 새로운 네트워크 설정<br/>(Netplan/ifcfg)
-    Job->>Node: 드리프트 감지 및 동기화
-
-    Note over Controller: 상태 업데이트
-    Job-->>Controller: 실행 결과 수집
-    Controller->>K8s: CR 상태 업데이트<br/>(Configured/Failed)
-    Controller->>K8s: Job 정리 (TTL)
+    Job-->>Ctl: Termination message (results)
+    Ctl->>API: Update CR status (Configured/Failed)
+    Ctl->>API: Cleanup Job (TTL / delayed delete)
 ```
 
 ## Agent Job 동작 및 안정성
