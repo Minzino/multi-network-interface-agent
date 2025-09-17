@@ -4,7 +4,7 @@
 
 OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스를 **완전 자동으로 관리**하는 Controller + Job 기반 시스템입니다.
 
-## 📋 개요
+## 개요
 
 ### 핵심 특징
 - **단일 이미지, 이중 실행**: 하나의 컨테이너 이미지에서 Controller/Agent 모드로 동작
@@ -12,8 +12,8 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 - **노드별 맞춤 실행**: 각 노드의 SystemUUID 검증 후 네트워크 인터페이스 자동 설정
 - **실시간 상태 동기화**: Job 완료 후 Controller가 자동으로 CR status 업데이트
 - **라우팅 충돌 방지**: 전역 라우팅 직렬화로 네트워크 테이블 안정성 보장
-- **SELinux 지원(옵션)**: RHEL에서 `.nmconnection`/`.link` 파일 레이블 복원(restorecon) 옵션 제공
 - **성능 최적화**: 안정성 우선 동시성 제어 (기본 1개 작업, 설정 가능)
+  
 
 ### 동작 방식
 1. **Controller (Deployment)**: CR 변경사항을 실시간 감시
@@ -28,18 +28,18 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 - Preflight: UP NIC이라도 IPv4/라우트/마스터 소속이 없으면 허용; 우회 플래그 `PREFLIGHT_ALLOW_UP` 제공
 - 라우팅/기본경로 변경은 전역 직렬화
 
-## 🔄 현재 로직 흐름
+## 현재 로직 흐름
 
 ### 시스템 아키텍처
 
 ```mermaid
 graph TB
-    External[External System<br/>📋 OpenStack 모니터링]
+    External[External System<br/>OpenStack 모니터링]
 
 subgraph "Kubernetes Cluster"
 subgraph "CR 처리"
-MultiNICController[MultiNIC Controller<br/>👁️ CR Watch]
-NodeCR[MultiNicNodeConfig CR<br/>📋 노드별 Interface 데이터:<br/>- Worker01: 2 interfaces<br/>- Worker02: 1 interface<br/>- Worker03: 3 interfaces]
+MultiNICController[MultiNIC Controller<br/>CR Watch]
+NodeCR[MultiNicNodeConfig CR<br/>노드별 Interface 데이터]
 end
 
 subgraph "Job 실행"
@@ -100,30 +100,30 @@ sequenceDiagram
     participant Job as Agent Job
     participant Node as Worker Node
 
-    Note over External: 1️⃣ CR 생성
+    Note over External: CR 생성
     External->>K8s: MultiNicNodeConfig CR 생성
 
-    Note over Controller: 2️⃣ 실시간 감지
+    Note over Controller: 실시간 감지
     K8s-->>Controller: Watch Event<br/>(CR 변경 감지)
     Controller->>Controller: Instance ID → SystemUUID 매핑
 
-    Note over Job: 3️⃣ Job 스케줄링
+    Note over Job: Job 스케줄링
     Controller->>K8s: Node SystemUUID 조회
     Controller->>K8s: Agent Job 생성<br/>(nodeSelector 적용)
 
-    Note over Node: 4️⃣ 네트워크 구성
+    Note over Node: 네트워크 구성
     K8s->>Job: Job 실행 (타겟 노드)
     Job->>Node: 고아 인터페이스 정리
     Job->>Node: 새로운 네트워크 설정<br/>(Netplan/ifcfg)
     Job->>Node: 드리프트 감지 및 동기화
 
-    Note over Controller: 5️⃣ 상태 업데이트
+    Note over Controller: 상태 업데이트
     Job-->>Controller: 실행 결과 수집
     Controller->>K8s: CR 상태 업데이트<br/>(Configured/Failed)
     Controller->>K8s: Job 정리 (TTL)
 ```
 
-## ⚙️ Agent Job 동작 및 보안 기능
+## Agent Job 동작 및 안정성
 
 ### 네트워크 구성 프로세스
 - **시작 시 정리 수행**(RUN_MODE=job):
@@ -139,13 +139,7 @@ sequenceDiagram
 
 - **처리 순서**: "정리 → 설정(적용) → 검증"으로 실행
 
-### 보안 및 안정성 기능
-- **SELinux 지원** (RHEL 환경):
-  - 네트워크 설정 파일 생성 후 `restorecon -Rv` 자동 실행
-  - NetworkManager/udev가 파일을 정상 읽을 수 있도록 SELinux context 복원
-  - 컨테이너 환경에서 `nsenter`를 통한 호스트 실행
-  - 기본 비활성화, 필요시 옵션으로 활성화 가능
-
+### 안정성 기능
 - **라우팅 충돌 방지**:
   - 전역 mutex를 통한 라우팅 테이블 직렬화
   - 동시 네트워크 설정으로 인한 라우팅 테이블 경쟁 상태 방지
@@ -171,11 +165,6 @@ helm upgrade --install multinic-agent ./deployments/helm \
   --set image.tag=1.0.0 \
   --set maxConcurrentTasks=3
 
-# RHEL 환경 (SELinux 활성화)
-helm upgrade --install multinic-agent ./deployments/helm \
-  -n multinic-system \
-  --set image.tag=1.0.0 \
-  --set rhelAdapter.enableSELinuxRestore=true
 ```
 
 수동 전체 정리(옵션):
@@ -184,7 +173,7 @@ helm upgrade --install multinic-agent ./deployments/helm \
 AGENT_ACTION=cleanup
 ```
 
-## 📦 패키지 구조
+## 패키지 구조
 
 ```
 multinic-agent/
@@ -200,7 +189,7 @@ multinic-agent/
 │   │   └── usecases/        # ConfigureNetwork, DeleteNetwork
 │   ├── infrastructure/       # 인프라스트럭처 계층
 │   │   ├── persistence/     # MySQL Repository
-│   │   ├── network/         # Netplan, RHEL Adapter (SELinux 지원)
+│   │   ├── network/         # Netplan, RHEL Adapter
 │   │   ├── metrics/         # Prometheus 메트릭 수집
 │   │   └── config/         # 설정 관리
 │   └── controller/          # Controller 구현
@@ -295,7 +284,7 @@ spec:
       mtu: 1450
 ```
 
-## 🚀 배포 방법
+## 배포 방법
 
 ### 1. SSH 패스워드 설정
 ```bash
@@ -305,7 +294,7 @@ vi scripts/deploy.sh
 ```
 
 
-## 🚀 빠른 시작
+## 빠른 시작
 
 ### 사전 요구사항
 - Kubernetes 1.24+
@@ -408,10 +397,10 @@ helm upgrade --install multinic-agent ./deployments/helm \
 kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-controller
 ```
 
-**이 단계에서 생성되는 리소스:**
-- ✅ **Controller Deployment**: CR 감시 및 Agent Job 스케줄링
-- ✅ **ServiceAccount + RBAC**: Job 생성 권한 설정
-- 🔄 **자동화 시작**: 이제 CR 생성 시 자동으로 Agent Job 실행
+이 단계에서 생성되는 리소스:
+- Controller Deployment: CR 감시 및 Agent Job 스케줄링
+- ServiceAccount + RBAC: Job 생성 권한 설정
+- 자동화 시작: 이제 CR 생성 시 자동으로 Agent Job 실행
 
 ### 업그레이드
 ```bash
@@ -434,7 +423,7 @@ kubectl delete crd multinicnodeconfigs.multinic.io
 kubectl delete namespace multinic-system
 ```
 
-## 🚀 원클릭 배포 (자동화)
+## 원클릭 배포 (자동화)
 
 이 Helm 차트는 MultiNic Agent의 모든 컴포넌트를 Kubernetes 클러스터에 배포하고 관리합니다.
 
@@ -451,17 +440,16 @@ SSH_PASSWORD=${SSH_PASSWORD:-"배포 대상 ssh password 입력"}
 ./scripts/deploy.sh
 ```
 
-**배포 스크립트 기능:**
-- ✅ 필수 도구 확인 (`nerdctl`, `helm`, `kubectl`, `sshpass`)
-- 🔨 이미지 빌드 (`nerdctl build`)
-- 📦 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
-- 🎯 CRD 설치 (`kubectl apply`)
-- ⚙️ Helm 차트 배포 (`helm upgrade --install`)
-- ✅ 배포 상태 확인
-- 🔒 보안 설정 자동 적용 (SELinux, 라우팅 직렬화)
-- 📊 메트릭 수집 활성화
+배포 스크립트 기능:
+- 필수 도구 확인 (`nerdctl`, `helm`, `kubectl`, `sshpass`)
+- 이미지 빌드 (`nerdctl build`)
+- 모든 노드에 이미지 배포 (`scp` + `nerdctl load`)
+- CRD 설치 (`kubectl apply`)
+- Helm 차트 배포 (`helm upgrade --install`)
+- 배포 상태 확인
+- 라우팅 직렬화 설정 유지, 메트릭 수집 활성화
 
-## ✅ 배포 완료 확인
+## 배포 완료 확인
 
 ### 1. Controller 상태 확인
 ```bash
