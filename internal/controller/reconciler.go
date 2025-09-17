@@ -172,6 +172,10 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
     if err != nil { return err }
     for i := range jobs.Items {
         job := &jobs.Items[i]
+        // Skip cleanup jobs for CR status updates; cleanup success/failure should not mark CR Failed/Configured
+        if action := job.Labels["multinic.io/action"]; strings.EqualFold(strings.TrimSpace(action), "cleanup") {
+            continue
+        }
         nodeName := job.Labels["multinic.io/node-name"]
         if nodeName == "" { continue }
         u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})

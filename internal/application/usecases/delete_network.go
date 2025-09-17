@@ -142,11 +142,18 @@ func (uc *DeleteNetworkUseCase) executeIfcfgCleanup(ctx context.Context, input D
 	// ifcfg 파일 디렉토리
 	ifcfgDir := "/etc/sysconfig/network-scripts"
 
-	// 디렉토리의 파일 목록 가져오기
-	files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
-	}
+    // 디렉토리의 파일 목록 가져오기 (RHEL9+ 환경에서는 디렉토리가 없을 수 있음 → 비치명적으로 취급)
+    files, err := uc.namingService.ListNetplanFiles(ifcfgDir)
+    if err != nil {
+        // 디렉토리 부재는 정상 시나리오로 간주하고 조용히 종료
+        if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file or directory") {
+            uc.logger.WithField("dir", ifcfgDir).Info("ifcfg directory not present - skipping full cleanup")
+            // 추가: 시스템에 남아있는 multinicX 인터페이스 이름 정리 (DOWN 상태만 대상)
+            uc.cleanupMultinicInterfaceNames(ctx)
+            return output, nil
+        }
+        return nil, fmt.Errorf("failed to list ifcfg files: %w", err)
+    }
 
 	// 고아 파일 찾기
 	orphanedFiles, err := uc.findOrphanedIfcfgFiles(ctx, files, ifcfgDir)
