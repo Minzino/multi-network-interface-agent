@@ -125,7 +125,10 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
 
     // 4. Persist files: .link + .nmconnection with 9X prefix
     idx := extractIndexRHEL(ifaceName)
-    linkPath := filepath.Join("/etc/systemd/network", fmt.Sprintf("9%d-%s.link", idx, ifaceName))
+    // Ensure parent directories exist
+    _ = a.fileSystem.MkdirAll(constants.SystemdNetworkDir, 0755)
+    _ = a.fileSystem.MkdirAll(a.GetConfigDir(), 0755)
+    linkPath := filepath.Join(constants.SystemdNetworkDir, fmt.Sprintf("9%d-%s.link", idx, ifaceName))
     nmPath := filepath.Join(a.GetConfigDir(), fmt.Sprintf("9%d-%s.nmconnection", idx, ifaceName))
     linkContent := fmt.Sprintf("[Match]\nMACAddress=%s\n[Link]\nName=%s\n", strings.ToLower(macAddress), ifaceName)
     if err := a.fileSystem.WriteFile(linkPath, []byte(linkContent), 0644); err != nil { return errors.NewSystemError("failed to write .link", err) }

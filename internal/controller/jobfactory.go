@@ -69,6 +69,15 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
             }},
         })
         mounts = append(mounts, corev1.VolumeMount{Name: "nm-connections", MountPath: "/etc/NetworkManager/system-connections"})
+        // Also mount systemd network directory for .link files (persistent naming)
+        volumes = append(volumes, corev1.Volume{
+            Name: "systemd-network",
+            VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+                Path: "/etc/systemd/network",
+                Type: hostPathType(corev1.HostPathDirectoryOrCreate),
+            }},
+        })
+        mounts = append(mounts, corev1.VolumeMount{Name: "systemd-network", MountPath: "/etc/systemd/network"})
     }
 
     backoffLimit := int32(1)
