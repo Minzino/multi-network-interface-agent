@@ -34,39 +34,39 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 
 ```mermaid
 flowchart TB
-  EXT[Config Source and Operator]
-  EXTAPI[External API]
+  외부API[외부 API]
+  운영자[운영자]
 
-  subgraph K8s_Cluster[Kubernetes Cluster]
-    subgraph Control_Plane[Control Plane]
-      CTL[Controller]
+  subgraph 쿠버네티스클러스터[Kubernetes Cluster]
+    subgraph 컨트롤플레인[Control Plane]
+      컨트롤러[컨트롤러]
       CR[MultiNicNodeConfig CR]
     end
 
-    subgraph Worker_Nodes[Worker Nodes]
-      Node_A[Node A]
-      Node_B[Node B]
-      Node_C[Node C]
-      JOB[Agent Job on Node B]
-      Node_B --- JOB
+    subgraph 워커노드[Worker Nodes]
+      노드A[노드 A]
+      노드B[노드 B]
+      노드C[노드 C]
+      잡[에이전트 잡 노드B]
+      노드B --> 잡
 
-      subgraph Node_Runtime[Node Runtime on Node B]
-        PF[Preflight]
-        IP[Apply by ip]
-        PERSIST[Persist files]
-        VAL[Validate and Summary]
+      subgraph 노드런타임[노드 B 런타임]
+        사전점검[사전 점검]
+        적용[ip 적용]
+        영속[영속 파일 작성]
+        검증[검증 및 요약]
       end
 
-      JOB --> PF --> IP --> PERSIST --> VAL
+      잡 --> 사전점검 --> 적용 --> 영속 --> 검증
     end
   end
 
-  EXT --> CR
-  EXTAPI --> CR
-  CR -.watch.-> CTL
-  CTL -->|schedule job| JOB
-  VAL -->|termination log| CTL
-  CTL -->|update status| CR
+  운영자 --> CR
+  외부API --> CR
+  CR --> 컨트롤러
+  컨트롤러 --> 잡
+  검증 --> 컨트롤러
+  컨트롤러 --> CR
 ```
 
 ### 처리 워크플로우
