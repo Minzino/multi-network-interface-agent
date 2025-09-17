@@ -292,10 +292,10 @@ func (uc *ConfigureNetworkUseCase) preflightCheck(ctx context.Context, iface ent
     hasRoute, defaultOn := uc.hasRoutesForIface(foundName)
     if hasIPv4 || enslaved || hasRoute || defaultOn {
         reason := []string{}
-        if hasIPv4 { reason = append(reason, "has_ipv4") }
-        if enslaved { reason = append(reason, "enslaved") }
-        if hasRoute { reason = append(reason, "has_routes") }
-        if defaultOn { reason = append(reason, "default_route") }
+        if hasIPv4 { reason = append(reason, "has_ipv4"); metrics.IncPreflightUpBlock("has_ipv4") }
+        if enslaved { reason = append(reason, "enslaved"); metrics.IncPreflightUpBlock("enslaved") }
+        if hasRoute { reason = append(reason, "has_routes"); metrics.IncPreflightUpBlock("has_routes") }
+        if defaultOn { reason = append(reason, "default_route"); metrics.IncPreflightUpBlock("default_route") }
         return errors.NewValidationError(
             fmt.Sprintf("preflight: target interface in use (%s)", strings.Join(reason, ",")),
             fmt.Errorf("interface %s considered in-use", foundName),

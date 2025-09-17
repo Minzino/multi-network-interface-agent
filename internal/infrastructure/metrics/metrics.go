@@ -174,12 +174,21 @@ var (
 		},
 	)
 
-	RoutingOperationFailures = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "multinic_routing_operation_failures_total",
-			Help: "Total number of routing operation failures",
-		},
-	)
+    RoutingOperationFailures = promauto.NewCounter(
+        prometheus.CounterOpts{
+            Name: "multinic_routing_operation_failures_total",
+            Help: "Total number of routing operation failures",
+        },
+    )
+
+    // Preflight blocks (visibility for safety gate)
+    PreflightUpBlockTotal = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "multinic_preflight_up_block_total",
+            Help: "Total number of preflight blocks for UP interfaces by reason",
+        },
+        []string{"reason"}, // has_ipv4, has_routes, default_route, enslaved
+    )
 )
 
 // RecordInterfaceProcessing은 인터페이스 처리 시간을 기록합니다
@@ -269,5 +278,10 @@ func ObserveRoutingOperationDuration(duration float64) {
 
 // IncRoutingOperationFailures는 라우팅 작업 실패 카운터를 증가시킵니다
 func IncRoutingOperationFailures() {
-	RoutingOperationFailures.Inc()
+    RoutingOperationFailures.Inc()
+}
+
+// IncPreflightUpBlock increments preflight block counter per reason
+func IncPreflightUpBlock(reason string) {
+    PreflightUpBlockTotal.WithLabelValues(reason).Inc()
 }
