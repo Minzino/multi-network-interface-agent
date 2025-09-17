@@ -78,6 +78,9 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
         action = "apply"
     }
 
+    // 에이전트 헬스/프로브 포트: 8080 충돌을 피하기 위해 18080 사용
+    const healthPort int32 = 18080
+
     job := &batchv1.Job{
         ObjectMeta: metav1.ObjectMeta{
             Name:      p.Name,
@@ -118,12 +121,16 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                                 {Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
                                 {Name: "LOG_LEVEL", Value: "info"},
                                 {Name: "POLL_INTERVAL", Value: "30s"},
+                                // Agent health/metrics port override (avoid 8080 conflicts)
+                                {Name: "HEALTH_PORT", Value: fmt.Sprintf("%d", healthPort)},
                                 // optional action: cleanup
                                 {Name: "AGENT_ACTION", Value: p.Action},
                             },
-                            Ports: []corev1.ContainerPort{{Name: "health", ContainerPort: 8080}},
-                            LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(8080)}}, InitialDelaySeconds: 30, PeriodSeconds: 30},
-                            ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(8080)}}, InitialDelaySeconds: 5, PeriodSeconds: 10},
+                            // 주의: hostNetwork=true 환경에서 ContainerPort를 정의하면
+                            // 스케줄러가 호스트 포트 충돌을 검사하여 스케줄링이 실패할 수 있음.
+                            // 프로브는 정수 포트 참조로 동작하므로 ContainerPort 선언 없이 유지합니다.
+                            LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(healthPort)}}, InitialDelaySeconds: 30, PeriodSeconds: 30},
+                            ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstrFrom(healthPort)}}, InitialDelaySeconds: 5, PeriodSeconds: 10},
                             SecurityContext: &corev1.SecurityContext{Privileged: pointer.Bool(true), Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN", "SYS_ADMIN"}}},
                             VolumeMounts:    mounts,
                         },
