@@ -35,29 +35,19 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 ```mermaid
 flowchart TB
     EXT[Config Source / Operator]
-
-    subgraph KC[Kubernetes Cluster]
-        subgraph CP[Control Plane]
-            CTL[Controller]
-            CR[MultiNicNodeConfig CR]
-        end
-        subgraph NS[Nodes]
-            JOB[Agent Job (node-selected)]
-        end
-    end
-
-    subgraph RT[Node Runtime]
-        PF[Preflight]
-        IP[Apply via ip]
-        PS[Persist-only files]
-        VA[Validate & Summary]
-    end
+    CTL[Controller]
+    CR[MultiNicNodeConfig CR]
+    JOB[Agent Job]
+    PF[Preflight]
+    IP[Apply via ip]
+    PERSIST[Persist files only]
+    VAL[Validate & Summary]
 
     EXT --> CR
     CR -.watch.-> CTL
-    CTL -->|schedule job| JOB
-    JOB --> PF --> IP --> PS --> VA
-    VA -->|termination log| CTL
+    CTL -->|schedule| JOB
+    JOB --> PF --> IP --> PERSIST --> VAL
+    VAL -->|termination log| CTL
     CTL -->|update status| CR
 ```
 
