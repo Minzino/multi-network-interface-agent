@@ -33,40 +33,68 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 ### 시스템 아키텍처
 
 ```mermaid
-flowchart TB
-  외부API[외부 API]
-  운영자[운영자]
+graph TB
+  %% 상단: MGMT Cluster
+  subgraph "MGMT Cluster"
+    Operator[Operator]
+    ViolaAPI[Viola API]
+  end
 
-  subgraph 쿠버네티스클러스터[Kubernetes Cluster]
-    subgraph 컨트롤플레인[Control Plane]
-      컨트롤러[컨트롤러]
-      CR[MultiNicNodeConfig CR]
+  %% Biz Cluster
+  subgraph "Kubernetes Cluster (Biz)"
+    subgraph "CR 처리"
+      MultiNICController[MultiNIC Controller\nCR Watch]
+      NodeCR[MultiNicNodeConfig CR\n노드별 Interface 데이터]
     end
 
-    subgraph 워커노드[Worker Nodes]
-      노드A[노드 A]
-      노드B[노드 B]
-      노드C[노드 C]
-      잡[에이전트 잡 노드B]
-      노드B --> 잡
+    subgraph "Job 실행"
+      Job1[Agent Job\nNode1 대상]
+      Job2[Agent Job\nNode2 대상]
+      Job3[Agent Job\nNode3 대상]
+    end
 
-      subgraph 노드런타임[노드 B 런타임]
-        사전점검[사전 점검]
-        적용[ip 적용]
-        영속[영속 파일 작성]
-        검증[검증 및 요약]
-      end
-
-      잡 --> 사전점검 --> 적용 --> 영속 --> 검증
+    subgraph "Worker Nodes"
+      Node1[Node1\nSystemUUID: b4975c5f-50bb]
+      Node2[Node2\nSystemUUID: d4defd76-faa9]
+      Node3[Node3\nSystemUUID: a1b2c3d4-e5f6]
     end
   end
 
-  운영자 --> CR
-  외부API --> CR
-  CR --> 컨트롤러
-  컨트롤러 --> 잡
-  검증 --> 컨트롤러
-  컨트롤러 --> CR
+  %% Network Interfaces
+  subgraph "Network Interfaces"
+    NIC1[Node1: multinic0, multinic1]
+    NIC2[Node2: multinic0]
+    NIC3[Node3: multinic0, multinic1, multinic2]
+  end
+
+  %% 데이터 흐름
+  Operator -->|인터페이스 정보 POST| ViolaAPI
+  ViolaAPI -->|CR 생성| NodeCR
+  NodeCR -.->|Watch Event| MultiNICController
+  MultiNICController -->|Node별 Job 스케줄링| Job1
+  MultiNICController -->|Node별 Job 스케줄링| Job2
+  MultiNICController -->|Node별 Job 스케줄링| Job3
+  Job1 -->|ip 적용 + 영속 파일 작성| Node1
+  Job2 -->|ip 적용 + 영속 파일 작성| Node2
+  Job3 -->|ip 적용 + 영속 파일 작성| Node3
+  Node1 -->|인터페이스 생성| NIC1
+  Node2 -->|인터페이스 생성| NIC2
+  Node3 -->|인터페이스 생성| NIC3
+
+  %% 스타일(렌더러 미지원 시 제거 가능)
+  classDef mgmt fill:#e8f5e8
+  classDef controller fill:#f3e5f5
+  classDef cr fill:#fff3e0
+  classDef job fill:#ffecb3
+  classDef node fill:#fafafa
+  classDef nic fill:#ffcdd2
+
+  class Operator,ViolaAPI mgmt
+  class MultiNICController controller
+  class NodeCR cr
+  class Job1,Job2,Job3 job
+  class Node1,Node2,Node3 node
+  class NIC1,NIC2,NIC3 nic
 ```
 
 ### 처리 워크플로우
@@ -95,16 +123,6 @@ sequenceDiagram
     컨트롤러->>API: CR 상태 업데이트(Configured/Failed)
     컨트롤러->>API: Job 정리(TTL)
 ```
-
-설명(한글)
-- 외부 API(예: OpenStack 연동 서비스, CMDB 싱크러) 또는 운영자가 노드별 인터페이스 정보(MAC, IP, CIDR, MTU)를 포함한 MultiNicNodeConfig CR을 생성/갱신한다.
-- Controller는 CR 변경을 Watch로 감지하고, 대상 노드 정보를 확인한 뒤 해당 노드에 Agent Job을 스케줄한다.
-- Job은 노드에서 Preflight를 수행한다. 인터페이스가 UP이어도 IPv4/라우트/마스터 소속이 없으면 “미사용”으로 간주하여 진행한다.
-- ip 명령어로 즉시 적용한다(이름 변경, MTU, IPv4, 라우트). 이 단계에서 netplan/nmcli 즉시 적용은 호출하지 않는다.
-- OS별 영속 파일만 작성한다( persist-only ).
-  - Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name 포함)
-  - RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection
-- 검증 후 결과 요약을 termination log로 남기면, Controller가 이를 읽어 CR status를 Configured/Failed로 갱신하고 Job을 정리한다.
 
 ## Agent Job 동작 및 안정성
 
@@ -527,18 +545,7 @@ helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
   --set maxConcurrentTasks=1 \
   --set resources.limits.cpu=500m \
-  --set resources.limits.memory=512Mi \
-  --set rhelAdapter.enableSELinuxRestore=true  # RHEL 환경에서
-```
-
-#### 대규모 클러스터 (성능 최적화)
-```bash
-helm upgrade --install multinic-agent ./deployments/helm \
-  --namespace multinic-system \
-  --set maxConcurrentTasks=5 \
-  --set resources.limits.cpu=1000m \
-  --set resources.limits.memory=1Gi \
-  --set nodeSelector.node-role\\.kubernetes\\.io/worker=""
+  --set resources.limits.memory=512Mi
 ```
 
 ### 모니터링 및 로깅
@@ -561,30 +568,4 @@ kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-control
 
 # Agent Job 로그 (실제 네트워크 설정)
 kubectl logs -n multinic-system -l app.kubernetes.io/name=multinic-agent-job -f
-```
-
-### 문제 해결
-
-#### 자주 발생하는 이슈와 해결책
-
-**1. SELinux 관련 오류 (RHEL 환경)**
-```bash
-# 문제: NetworkManager가 설정 파일을 읽지 못함
-# 해결: SELinux 복원 활성화
---set rhelAdapter.enableSELinuxRestore=true
-```
-
-**2. 라우팅 테이블 충돌**
-```bash
-# 문제: 동시 네트워크 설정으로 라우팅 경쟁
-# 해결: 동시성 줄이기
---set maxConcurrentTasks=1
-```
-
-**3. 리소스 부족**
-```bash
-# 문제: Job 생성 실패
-# 해결: 리소스 제한 조정
---set resources.requests.memory=256Mi
---set resources.limits.memory=1Gi
 ```
