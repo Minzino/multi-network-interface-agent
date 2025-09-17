@@ -32,34 +32,60 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 
 ### 시스템 아키텍처
 
-구성 요소
-- Controller(Deployment)
-  - CR 변경 감시(Watch)
-  - 대상 노드 확인(osImage/SystemUUID)
-  - Agent Job 생성/정리(TTL)
-  - Job 종료 요약(termination log) 수집 후 CR 상태 업데이트
-- Agent(Job 또는 DaemonSet)
-  - 대상 노드에서 실행
-  - Preflight 수행(해당 MAC 존재 확인, UP이지만 미사용이면 허용)
-  - ip 명령어로 런타임 적용(이름 변경, MTU, IPv4, 라우트)
-  - OS별 영속 파일만 작성(즉시 reload/apply 호출 없음)
-    - Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name 포함)
-    - RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection
-  - 검증 및 요약 기록(termination log)
+```mermaid
+flowchart TB
+    EXT[Config Source / Operator]
 
-노드 런타임 단계
-1) Preflight → 2) ip 기반 런타임 적용 → 3) Persist-only 파일 작성 → 4) 검증/요약
+    subgraph KC[Kubernetes Cluster]
+        subgraph CP[Control Plane]
+            CTL[Controller]
+            CR[MultiNicNodeConfig CR]
+        end
+        subgraph NS[Nodes]
+            JOB[Agent Job (node-selected)]
+        end
+    end
+
+    subgraph RT[Node Runtime]
+        PF[Preflight]
+        IP[Apply via ip]
+        PS[Persist-only files]
+        VA[Validate & Summary]
+    end
+
+    EXT --> CR
+    CR -.watch.-> CTL
+    CTL -->|schedule job| JOB
+    JOB --> PF --> IP --> PS --> VA
+    VA -->|termination log| CTL
+    CTL -->|update status| CR
+```
 
 ### 처리 워크플로우
 
-1) CR 생성/수정: 운영 시스템이 노드별 인터페이스(MAC, IP, CIDR, MTU)를 포함한 MultiNicNodeConfig를 생성/갱신한다.
-2) 감지/스케줄: Controller가 CR 변경을 감지하고 대상 노드를 확인한 뒤 해당 노드로 Agent Job을 생성한다(nodeSelector 적용).
-3) Preflight: Job이 노드에서 실행되며, 대상 MAC 존재 여부를 확인하고, 인터페이스가 UP이어도 미사용(IPv4/라우트/마스터 소속 없음)인 경우는 허용한다.
-4) 런타임 적용: ip 명령어로 이름 변경, MTU 설정, IPv4 설정, 라우트 적용을 즉시 반영한다.
-5) 영속 파일 작성: OS별 경로에 영속 파일만 작성한다. Ubuntu는 netplan YAML(set-name 포함), RHEL은 .link + .nmconnection을 생성한다. 즉시 reload/apply는 호출하지 않는다.
-6) 검증/요약: 인터페이스 존재 및 상태를 확인하고 결과 요약을 termination log로 기록한다.
-7) 상태 업데이트: Controller가 Job 요약을 읽어 CR 상태를 Configured/Failed로 업데이트하고 Job을 정리한다.
-8) 라우팅 직렬화: 라우팅/기본 경로 변경은 전역 뮤텍스 보호 하에 직렬로 실행된다.
+```mermaid
+sequenceDiagram
+    participant 운영 as Config Source
+    participant API as Kubernetes API
+    participant 컨트롤러 as Controller
+    participant 잡 as Agent Job
+    participant 노드 as Target Node
+
+    운영->>API: CR 생성/수정 (MAC, IP, CIDR, MTU)
+    API-->>컨트롤러: Watch 이벤트 전달
+    컨트롤러->>API: 노드 정보 조회(osImage/SystemUUID)
+    컨트롤러->>API: Agent Job 생성(nodeSelector)
+
+    API->>잡: 대상 노드에서 실행
+    잡->>노드: Preflight (MAC 확인, 미사용 NIC 허용)
+    잡->>노드: ip 기반 적용(이름, MTU, IPv4, 라우트)
+    잡->>노드: 영속 파일만 작성(Ubuntu: netplan, RHEL: .link + .nmconnection)
+    잡->>노드: 검증 및 termination log 기록
+
+    잡-->>컨트롤러: 요약 전달
+    컨트롤러->>API: CR 상태 업데이트(Configured/Failed)
+    컨트롤러->>API: Job 정리(TTL)
+```
 
 ## Agent Job 동작 및 안정성
 
