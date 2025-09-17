@@ -12,13 +12,21 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 - **노드별 맞춤 실행**: 각 노드의 SystemUUID 검증 후 네트워크 인터페이스 자동 설정
 - **실시간 상태 동기화**: Job 완료 후 Controller가 자동으로 CR status 업데이트
 - **라우팅 충돌 방지**: 전역 라우팅 직렬화로 네트워크 테이블 안정성 보장
-- **SELinux 지원**: RHEL 환경에서 파일 레이블 자동 복원 (선택적 활성화)
+- **SELinux 지원(옵션)**: RHEL에서 `.nmconnection`/`.link` 파일 레이블 복원(restorecon) 옵션 제공
 - **성능 최적화**: 안정성 우선 동시성 제어 (기본 1개 작업, 설정 가능)
 
 ### 동작 방식
 1. **Controller (Deployment)**: CR 변경사항을 실시간 감시
 2. **Agent (Job)**: 특정 노드에서만 실행되어 네트워크 인터페이스 설정
 3. **자동 스케줄링**: CR 업데이트 → 해당 노드용 Agent Job 생성 → 네트워크 구성 → 상태 업데이트
+
+### 결정 사항(운영 철학)
+- 런타임 적용은 `ip` 기반으로 즉시 반영(이름/MTU/IPv4/라우트)
+- 영속성은 OS별 파일 “작성만” 수행(즉시 `netplan apply`/`nmcli reload` 호출 없음)
+- Ubuntu: netplan YAML에 `match.macaddress + set-name` 포함으로 이름 영속
+- RHEL: `.link`(systemd-udev, 이름 영속) + `.nmconnection`(NetworkManager, 권한 600) 작성, Helm이 `/etc/systemd/network`도 마운트
+- Preflight: UP NIC이라도 IPv4/라우트/마스터 소속이 없으면 허용; 우회 플래그 `PREFLIGHT_ALLOW_UP` 제공
+- 라우팅/기본경로 변경은 전역 직렬화
 
 ## 🔄 현재 로직 흐름
 
@@ -119,8 +127,8 @@ sequenceDiagram
 
 ### 네트워크 구성 프로세스
 - **시작 시 정리 수행**(RUN_MODE=job):
-  - Ubuntu: `/etc/netplan/9*-multinic*.yaml`만 삭제 후 `netplan apply` 실행
-  - RHEL: `/etc/sysconfig/network-scripts/ifcfg-multinic*`만 삭제
+  - Ubuntu: `/etc/netplan/9*-multinic*.yaml` 고아 파일만 삭제(즉시 `netplan apply`는 호출하지 않음)
+  - RHEL: RHEL9+에서는 `/etc/sysconfig/network-scripts`가 없을 수 있으므로 `.nmconnection` 고아 파일만 정리하고 디렉터리 부재는 무시
   - 시스템 기본 파일(`50-cloud-init.yaml` 등)은 건드리지 않음
   - 남아있는 `multinic0~9` 인터페이스는 DOWN 상태일 때만 altname(ens*/enp*)으로 rename 시도(없으면 스킵)
 
@@ -375,6 +383,8 @@ kubectl get crd multinicnodeconfigs.multinic.io
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
   --set image.tag=1.0.0 \
+  --set agent.metricsPort=18080 \
+  --set agent.preflightAllowUp=false \
   --wait --timeout=300s
 ```
 
