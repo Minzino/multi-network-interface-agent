@@ -32,60 +32,34 @@ OpenStack 환경에서 Kubernetes 노드의 다중 네트워크 인터페이스�
 
 ### 시스템 아키텍처
 
-```mermaid
-graph TB
-    External[Config Source / Operator]
+구성 요소
+- Controller(Deployment)
+  - CR 변경 감시(Watch)
+  - 대상 노드 확인(osImage/SystemUUID)
+  - Agent Job 생성/정리(TTL)
+  - Job 종료 요약(termination log) 수집 후 CR 상태 업데이트
+- Agent(Job 또는 DaemonSet)
+  - 대상 노드에서 실행
+  - Preflight 수행(해당 MAC 존재 확인, UP이지만 미사용이면 허용)
+  - ip 명령어로 런타임 적용(이름 변경, MTU, IPv4, 라우트)
+  - OS별 영속 파일만 작성(즉시 reload/apply 호출 없음)
+    - Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name 포함)
+    - RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection
+  - 검증 및 요약 기록(termination log)
 
-subgraph "Kubernetes Cluster"
-  subgraph "Control Plane"
-    Controller[MultiNIC Controller (CR Watch)]
-    CR[MultiNicNodeConfig CR]
-  end
-  subgraph "Nodes"
-    AgentJob[Agent Job (node-selected)]
-  end
-end
-
-subgraph "Node Runtime (per target node)"
-  Preflight[Preflight checks\n- MAC present\n- UP-but-unused allowed]
-  RuntimeIP[ip runtime apply\n- link rename\n- MTU\n- IPv4\n- route]
-  Persist[Persist-only files\n- Ubuntu: /etc/netplan/90-*.yaml (match.macaddress + set-name)\n- RHEL: /etc/systemd/network/90-*.link + /etc/NetworkManager/system-connections/90-*.nmconnection\n- no immediate reload]
-  Validate[Validation + summary]
-end
-
-External --> CR
-CR -.Watch.-> Controller
-Controller -->|schedule job| AgentJob
-AgentJob --> Preflight --> RuntimeIP --> Persist --> Validate
-Validate -->|termination summary| Controller
-Controller -->|status update| CR
-```
+노드 런타임 단계
+1) Preflight → 2) ip 기반 런타임 적용 → 3) Persist-only 파일 작성 → 4) 검증/요약
 
 ### 처리 워크플로우
 
-```mermaid
-sequenceDiagram
-    participant Operator as Config Source
-    participant API as Kubernetes API
-    participant Ctl as Controller
-    participant Job as Agent Job
-    participant Node as Target Node
-
-    Operator->>API: Create/Update MultiNicNodeConfig
-    API-->>Ctl: Watch event (CR change)
-    Ctl->>API: Get Node osImage/SystemUUID
-    Ctl->>API: Create Job (nodeSelector by hostname)
-
-    API->>Job: Start pod on target node
-    Job->>Node: Preflight (MAC present, UP-but-unused allowed)
-    Job->>Node: Runtime apply via ip (rename, MTU, IPv4, route)
-    Job->>Node: Persist-only files (Ubuntu netplan / RHEL .link + .nmconnection)
-    Job->>Node: Validate and write termination summary
-
-    Job-->>Ctl: Termination message (results)
-    Ctl->>API: Update CR status (Configured/Failed)
-    Ctl->>API: Cleanup Job (TTL / delayed delete)
-```
+1) CR 생성/수정: 운영 시스템이 노드별 인터페이스(MAC, IP, CIDR, MTU)를 포함한 MultiNicNodeConfig를 생성/갱신한다.
+2) 감지/스케줄: Controller가 CR 변경을 감지하고 대상 노드를 확인한 뒤 해당 노드로 Agent Job을 생성한다(nodeSelector 적용).
+3) Preflight: Job이 노드에서 실행되며, 대상 MAC 존재 여부를 확인하고, 인터페이스가 UP이어도 미사용(IPv4/라우트/마스터 소속 없음)인 경우는 허용한다.
+4) 런타임 적용: ip 명령어로 이름 변경, MTU 설정, IPv4 설정, 라우트 적용을 즉시 반영한다.
+5) 영속 파일 작성: OS별 경로에 영속 파일만 작성한다. Ubuntu는 netplan YAML(set-name 포함), RHEL은 .link + .nmconnection을 생성한다. 즉시 reload/apply는 호출하지 않는다.
+6) 검증/요약: 인터페이스 존재 및 상태를 확인하고 결과 요약을 termination log로 기록한다.
+7) 상태 업데이트: Controller가 Job 요약을 읽어 CR 상태를 Configured/Failed로 업데이트하고 Job을 정리한다.
+8) 라우팅 직렬화: 라우팅/기본 경로 변경은 전역 뮤텍스 보호 하에 직렬로 실행된다.
 
 ## Agent Job 동작 및 안정성
 
