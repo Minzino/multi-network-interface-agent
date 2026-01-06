@@ -210,24 +210,51 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                     var sum struct { Failures []failure `json:"failures"` }
                     if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Failures) > 0 {
                         // 실패 목록 존재 → per-interface 상태 갱신, 전체는 Failed(JobFailedPartial)
-                        statuses := map[string]any{}
+                        statuses := []any{}
                         // build maps by id/mac
                         failByID := map[int]failure{}
                         failByMAC := map[string]failure{}
                         for _, f := range sum.Failures { failByID[f.ID] = f; if strings.TrimSpace(f.MAC) != "" { failByMAC[strings.ToLower(strings.TrimSpace(f.MAC))] = f } }
                         ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
                         if found {
+                            statuses = make([]any, 0, len(ifaces))
                             for i := range ifaces {
                                 ifaceMap, _ := ifaces[i].(map[string]any)
                                 name := fmt.Sprintf("multinic%d", i)
                                 id := getIntFromMap(ifaceMap, "id")
                                 mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
                                 if f, ok := failByID[id]; ok && id != 0 {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailedPartial", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
+                                        "interfaceIndex": int64(i),
+                                        "id":             int64(f.ID),
+                                        "macAddress":     mac,
+                                        "status":         "Failed",
+                                        "reason":         "JobFailedPartial",
+                                        "message":        f.Reason,
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 } else if f, ok := failByMAC[mac]; ok && mac != "" {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailedPartial", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
+                                        "interfaceIndex": int64(i),
+                                        "id":             int64(f.ID),
+                                        "macAddress":     mac,
+                                        "status":         "Failed",
+                                        "reason":         "JobFailedPartial",
+                                        "message":        f.Reason,
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 } else {
-                                    statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(id), "macAddress": mac, "status": "Configured", "reason": "JobSucceeded", "lastUpdated": time.Now().Format(time.RFC3339)}
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
+                                        "interfaceIndex": int64(i),
+                                        "id":             int64(id),
+                                        "macAddress":     mac,
+                                        "status":         "Configured",
+                                        "reason":         "JobSucceeded",
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 }
                             }
                         }
@@ -242,17 +269,20 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 }
                 if !handledPartial {
                     // 완전 성공 케이스: termination results가 있으면 실제 이름으로 반영
-                    statuses := map[string]any{}
+                    statuses := []any{}
                     usedResults := false
                     if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
                         type result struct { ID int `json:"id"`; MAC, Name, Status string }
                         var sum struct { Results []result `json:"results"` }
                         if err := json.Unmarshal([]byte(msg), &sum); err == nil && len(sum.Results) > 0 {
+                            statuses = make([]any, 0, len(sum.Results))
                             // spec 참조해 address/cidr/mtu 채우기
                             ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
                             for _, r := range sum.Results {
+                                name := strings.TrimSpace(r.Name)
                                 // 기본 필드
                                 st := map[string]any{
+                                    "name":         name,
                                     "id":           int64(r.ID),
                                     "macAddress":   strings.ToLower(strings.TrimSpace(r.MAC)),
                                     "status":       "Configured",
@@ -270,11 +300,18 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                                             st["address"] = getStringFromMap(m, "address")
                                             st["cidr"] = getStringFromMap(m, "cidr")
                                             st["mtu"] = int64(getIntFromMap(m, "mtu"))
+                                            if name == "" {
+                                                name = fmt.Sprintf("multinic%d", i)
+                                                st["name"] = name
+                                            }
                                             break
                                         }
                                     }
                                 }
-                                statuses[r.Name] = st
+                                if name == "" {
+                                    st["name"] = fmt.Sprintf("multinic%d", len(statuses))
+                                }
+                                statuses = append(statuses, st)
                             }
                             usedResults = true
                         }
@@ -297,7 +334,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                 log.Printf("job failed: %s/%s", namespace, job.Name)
                 // 종료 메시지(요약)에서 실패한 인터페이스 상세를 로그로 남김 및 per-interface 상태 반영
                 reason := "JobFailed"
-                statuses := map[string]any{}
+                statuses := []any{}
                 if msg := c.getJobTerminationMessage(ctx, namespace, job.Name); strings.TrimSpace(msg) != "" {
                     c.logJobSummary(msg)
                     // Try to parse JSON summary and compute per-interface statuses
@@ -322,41 +359,45 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
                         // Enumerate spec interfaces and map by id/MAC (more reliable than name)
                         ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
                         if found {
+                            statuses = make([]any, 0, len(ifaces))
                             for i := range ifaces {
                                 ifaceMap, _ := ifaces[i].(map[string]any)
                                 name := fmt.Sprintf("multinic%d", i)
                                 id := getIntFromMap(ifaceMap, "id")
                                 mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
                                 if f, ok := failByID[id]; ok && id != 0 {
-                                    statuses[name] = map[string]any{
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
                                         "interfaceIndex": int64(i),
-                                        "id":            int64(f.ID),
-                                        "macAddress":    mac,
-                                        "status":        "Failed",
-                                        "reason":        "JobFailed",
-                                        "message":       f.Reason,
-                                        "lastUpdated":   time.Now().Format(time.RFC3339),
-                                    }
+                                        "id":             int64(f.ID),
+                                        "macAddress":     mac,
+                                        "status":         "Failed",
+                                        "reason":         "JobFailed",
+                                        "message":        f.Reason,
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 } else if f, ok := failByMAC[mac]; ok && mac != "" {
-                                    statuses[name] = map[string]any{
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
                                         "interfaceIndex": int64(i),
-                                        "id":            int64(f.ID),
-                                        "macAddress":    mac,
-                                        "status":        "Failed",
-                                        "reason":        "JobFailed",
-                                        "message":       f.Reason,
-                                        "lastUpdated":   time.Now().Format(time.RFC3339),
-                                    }
+                                        "id":             int64(f.ID),
+                                        "macAddress":     mac,
+                                        "status":         "Failed",
+                                        "reason":         "JobFailed",
+                                        "message":        f.Reason,
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 } else {
                                     // Treat others as configured in a partial failure scenario
-                                    statuses[name] = map[string]any{
+                                    statuses = append(statuses, map[string]any{
+                                        "name":           name,
                                         "interfaceIndex": int64(i),
-                                        "id":            int64(id),
-                                        "macAddress":    mac,
-                                        "status":        "Configured",
-                                        "reason":        "JobPartialSuccess",
-                                        "lastUpdated":   time.Now().Format(time.RFC3339),
-                                    }
+                                        "id":             int64(id),
+                                        "macAddress":     mac,
+                                        "status":         "Configured",
+                                        "reason":         "JobPartialSuccess",
+                                        "lastUpdated":    time.Now().Format(time.RFC3339),
+                                    })
                                 }
                             }
                             if len(sum.Failures) < len(ifaces) { reason = "JobFailedPartial" }
@@ -542,20 +583,47 @@ func (c *Controller) ApplyTerminationSummary(ctx context.Context, namespace, nod
     failByMAC := map[string]failure{}
     for _, f := range sum.Failures { failByID[f.ID] = f; if strings.TrimSpace(f.MAC) != "" { failByMAC[strings.ToLower(strings.TrimSpace(f.MAC))] = f } }
     // Compute per-interface statuses
-    statuses := map[string]any{}
+    statuses := []any{}
     ifaces, found, _ := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if found {
+        statuses = make([]any, 0, len(ifaces))
         for i := range ifaces {
             ifaceMap, _ := ifaces[i].(map[string]any)
             name := fmt.Sprintf("multinic%d", i)
             id := getIntFromMap(ifaceMap, "id")
             mac := strings.ToLower(getStringFromMap(ifaceMap, "macAddress"))
             if f, ok := failByID[id]; ok && id != 0 {
-                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailed", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+                statuses = append(statuses, map[string]any{
+                    "name":           name,
+                    "interfaceIndex": int64(i),
+                    "id":             int64(f.ID),
+                    "macAddress":     mac,
+                    "status":         "Failed",
+                    "reason":         "JobFailed",
+                    "message":        f.Reason,
+                    "lastUpdated":    time.Now().Format(time.RFC3339),
+                })
             } else if f, ok := failByMAC[mac]; ok && mac != "" {
-                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(f.ID), "macAddress": mac, "status": "Failed", "reason": "JobFailed", "message": f.Reason, "lastUpdated": time.Now().Format(time.RFC3339)}
+                statuses = append(statuses, map[string]any{
+                    "name":           name,
+                    "interfaceIndex": int64(i),
+                    "id":             int64(f.ID),
+                    "macAddress":     mac,
+                    "status":         "Failed",
+                    "reason":         "JobFailed",
+                    "message":        f.Reason,
+                    "lastUpdated":    time.Now().Format(time.RFC3339),
+                })
             } else {
-                statuses[name] = map[string]any{"interfaceIndex": int64(i), "id": int64(id), "macAddress": mac, "status": "Configured", "reason": "JobPartialSuccess", "lastUpdated": time.Now().Format(time.RFC3339)}
+                statuses = append(statuses, map[string]any{
+                    "name":           name,
+                    "interfaceIndex": int64(i),
+                    "id":             int64(id),
+                    "macAddress":     mac,
+                    "status":         "Configured",
+                    "reason":         "JobPartialSuccess",
+                    "lastUpdated":    time.Now().Format(time.RFC3339),
+                })
             }
         }
     }
@@ -636,15 +704,15 @@ func getIntFromMap(m map[string]interface{}, key string) int {
 }
 
 // buildInterfaceStatuses creates detailed status information for each interface in the CR
-// Returns a map where keys are interface names (multinic0, multinic1, etc.)
-func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeName, status, reason string) map[string]any {
+// Returns a list where each entry includes the interface name (multinic0, multinic1, etc.)
+func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeName, status, reason string) []any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
         log.Printf("No interfaces found when building status for CR %s/%s", u.GetNamespace(), u.GetName())
-        return map[string]any{}
+        return []any{}
     }
 
-    interfaceStatuses := make(map[string]any)
+    interfaceStatuses := make([]any, 0, len(interfaces))
     
     for i, iface := range interfaces {
         ifaceMap, ok := iface.(map[string]interface{})
@@ -661,9 +729,10 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeNa
         
         // Generate interface name based on index (multinic0, multinic1, etc.)
         interfaceName := fmt.Sprintf("multinic%d", i)
-        
+
         // Build interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
+            "name":         interfaceName,
             "interfaceIndex": int64(i),
             "id":            int64(id),
             "macAddress":    macAddress,
@@ -674,9 +743,8 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeNa
             "reason":       reason,
             "lastUpdated":  time.Now().Format(time.RFC3339),
         }
-        
-        // Use interface name as key in the map
-        interfaceStatuses[interfaceName] = interfaceStatus
+
+        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
         
         // Log only final state changes to reduce noise
         if status == "Configured" && reason == "JobSucceeded" {
@@ -747,14 +815,14 @@ func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeN
 }
 
 // buildEnhancedInterfaceStatuses creates detailed status with actual system state check
-// Returns a map where keys are interface names (multinic0, multinic1, etc.)
-func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) map[string]any {
+// Returns a list where each entry includes the interface name (multinic0, multinic1, etc.)
+func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) []any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
-        return map[string]any{}
+        return []any{}
     }
 
-    interfaceStatuses := make(map[string]any)
+    interfaceStatuses := make([]any, 0, len(interfaces))
     
     for i, iface := range interfaces {
         ifaceMap, ok := iface.(map[string]interface{})
@@ -775,6 +843,7 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
         
         // Build comprehensive interface status (convert int types to int64 for unstructured compatibility)
         interfaceStatus := map[string]any{
+            "name":         interfaceName,
             "interfaceIndex": int64(i),
             "id":            int64(id),
             "macAddress":    macAddress,
@@ -784,11 +853,10 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
             "actualState":   actualState,
             "lastChecked":  time.Now().Format(time.RFC3339),
         }
-        
-        // Use interface name as key in the map
-        interfaceStatuses[interfaceName] = interfaceStatus
+
+        interfaceStatuses = append(interfaceStatuses, interfaceStatus)
     }
-    
+
     return interfaceStatuses
 }
 

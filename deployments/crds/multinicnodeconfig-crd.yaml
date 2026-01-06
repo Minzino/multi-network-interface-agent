@@ -114,11 +114,14 @@ spec:
                         type: string
                         format: date-time
                 interfaceStatuses:
-                  type: object
-                  description: Per-interface configuration results (keyed by interface name)
-                  additionalProperties:
+                  type: array
+                  description: Per-interface configuration results (one entry per interface)
+                  items:
                     type: object
                     properties:
+                      name:
+                        type: string
+                        description: Interface name (multinic0, multinic1, etc.)
                       interfaceIndex:
                         type: integer
                         format: int64

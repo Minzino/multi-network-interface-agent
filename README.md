@@ -255,7 +255,12 @@ spec:
               lastProcessed:
                 type: string
               interfaceStatuses:
-                type: object
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
 ```
 
 ### 예시 CR 적용
