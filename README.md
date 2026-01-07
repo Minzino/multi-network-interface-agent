@@ -1,4 +1,4 @@
-# MultiNIC Agent
+# Multi Network Interface Agent
 
 > **Kubernetes 네이티브 네트워크 자동화 에이전트**
 
