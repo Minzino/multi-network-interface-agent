@@ -155,12 +155,21 @@ func (c *Container) initializeServices() error {
     c.routingCoordinator = services.NewRoutingCoordinator(c.logger)
 
 	// 네트워크 관리자 팩토리
-	c.networkFactory = network.NewNetworkManagerFactory(
-		c.osDetector,
-		c.commandExecutor,
-		c.fileSystem,
-		c.logger,
-	)
+    netOpts := network.Options{
+        EnablePolicyRouting: c.config.Network.PolicyRoutingEnabled,
+        RoutingTableBase:    c.config.Network.RoutingTableBase,
+        RouteMetric:         c.config.Network.RouteMetric,
+        UseNoprefixroute:    c.config.Network.UseNoPrefixRoute,
+        SetArpSysctls:       c.config.Network.SetArpSysctls,
+        SetLooseRPFilter:    c.config.Network.SetLooseRPFilter,
+    }
+    c.networkFactory = network.NewNetworkManagerFactory(
+        c.osDetector,
+        c.commandExecutor,
+        c.fileSystem,
+        c.logger,
+        netOpts,
+    )
 
 	return nil
 }

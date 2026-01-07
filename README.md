@@ -174,6 +174,15 @@ helm upgrade --install multinic-agent ./deployments/helm \
 AGENT_ACTION=cleanup
 ```
 
+### 동일 CIDR 멀티 NIC 안전장치
+- 기본: 소스 기반 정책 라우팅 + `noprefixroute` 적용 → main 테이블/ens3 기본 라우트 유지
+- ARP 플럭스/RPF 완화: `arp_ignore=1`, `arp_announce=2`, `rp_filter=2` 를 인터페이스 단위로 적용
+- 설정값(환경변수/Helm `agent.network.*`):
+  - `NETWORK_POLICY_ROUTING_ENABLED`(default: true)
+  - `NETWORK_ROUTING_TABLE_BASE`(default: 100), `NETWORK_ROUTE_METRIC`(default: 100)
+  - `NETWORK_NOPREFIXROUTE`(default: true)
+  - `NETWORK_SET_ARP_SYSCTLS`(default: true), `NETWORK_SET_RP_FILTER_LOOSE`(default: true)
+
 ## 패키지 구조
 
 ```

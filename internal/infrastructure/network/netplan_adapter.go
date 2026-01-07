@@ -22,6 +22,7 @@ type NetplanAdapter struct {
 	fileSystem      interfaces.FileSystem
 	logger          *logrus.Logger
 	configDir       string
+	opts            Options
 }
 
 // exec is a small helper wrapping command execution with a sensible timeout
@@ -36,11 +37,22 @@ func NewNetplanAdapter(
 	fs interfaces.FileSystem,
 	logger *logrus.Logger,
 ) *NetplanAdapter {
+	return NewNetplanAdapterWithOptions(executor, fs, logger, DefaultOptions())
+}
+
+// NewNetplanAdapterWithOptions creates a new NetplanAdapter with explicit options
+func NewNetplanAdapterWithOptions(
+	executor interfaces.CommandExecutor,
+	fs interfaces.FileSystem,
+	logger *logrus.Logger,
+	opts Options,
+) *NetplanAdapter {
 	return &NetplanAdapter{
 		commandExecutor: executor,
 		fileSystem:      fs,
 		logger:          logger,
 		configDir:       constants.NetplanConfigDir,
+		opts:            opts.normalize(),
 	}
 }
 
@@ -85,7 +97,11 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
         parts := strings.Split(iface.CIDR(), "/")
         if len(parts) == 2 {
             full := fmt.Sprintf("%s/%s", addr, parts[1])
-            if _, err := a.exec(ctx, "ip", "addr", "replace", full, "dev", target); err != nil {
+            args := []string{"addr", "replace", full, "dev", target}
+            if a.opts.UseNoprefixroute {
+                args = append(args, "noprefixroute")
+            }
+            if _, err := a.exec(ctx, "ip", args...); err != nil {
                 return errors.NewNetworkError("failed to set IPv4 address", err)
             }
         } else {
@@ -97,6 +113,15 @@ func (a *NetplanAdapter) Configure(ctx context.Context, iface entities.NetworkIn
     if _, err := a.exec(ctx, "ip", "link", "set", target, "up"); err != nil {
         return errors.NewNetworkError("failed to set link up", err)
     }
+
+    // Policy routing per interface (keeps source-addressed traffic symmetric)
+    if a.opts.EnablePolicyRouting {
+        if err := a.applyPolicyRouting(ctx, iface, target); err != nil {
+            return err
+        }
+    }
+    // Interface-specific sysctl hardening
+    a.applySysctls(ctx, target)
 
     // 2) Persist via Netplan YAML (write-only, no apply)
     index := extractInterfaceIndex(target)
@@ -143,6 +168,7 @@ func (a *NetplanAdapter) Rollback(ctx context.Context, name string) error {
 
 	// Backup restore logic removed - simply remove configuration file
 
+    a.cleanupRouting(ctx, name)
     a.logger.WithField("interface", name).Info("network configuration rollback completed")
     return nil
 }
@@ -184,6 +210,23 @@ func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, 
             if iface.MTU() > 0 {
                 ethernetConfig["mtu"] = iface.MTU()
             }
+            if a.opts.EnablePolicyRouting {
+                table := a.opts.routingTable(interfaceName)
+                metric := a.opts.routeMetric(interfaceName)
+                ethernetConfig["routes"] = []map[string]interface{}{
+                    {
+                        "to":     iface.CIDR(),
+                        "table":  table,
+                        "metric": metric,
+                    },
+                }
+                ethernetConfig["routing-policy"] = []map[string]interface{}{
+                    {
+                        "from":  fmt.Sprintf("%s/%s", iface.Address(), prefix),
+                        "table": table,
+                    },
+                }
+            }
         } else {
             a.logger.WithFields(logrus.Fields{
                 "address": iface.Address(),
@@ -202,6 +245,78 @@ func (a *NetplanAdapter) generateNetplanConfig(iface entities.NetworkInterface, 
 	}
 
 	return config
+}
+
+// applyPolicyRouting wires per-interface rule + route to keep traffic symmetric.
+func (a *NetplanAdapter) applyPolicyRouting(ctx context.Context, iface entities.NetworkInterface, target string) error {
+	addr := strings.TrimSpace(iface.Address())
+	cidr := strings.TrimSpace(iface.CIDR())
+	if addr == "" || cidr == "" {
+		return nil
+	}
+	table := a.opts.routingTable(target)
+	metric := a.opts.routeMetric(target)
+
+	// Remove main-table connected route if present to avoid ECMP within same CIDR.
+	if a.opts.UseNoprefixroute {
+		if _, err := a.exec(ctx, "ip", "route", "del", cidr, "dev", target); err != nil {
+			a.logger.WithError(err).WithFields(logrus.Fields{
+				"interface": target,
+				"cidr":      cidr,
+			}).Debug("ignored: failed to delete main-table route")
+		}
+	}
+
+	// Refresh rule: delete if present, then add (replace is not supported on some iproute versions)
+	ruleArgs := []string{"rule", "del", "from", fmt.Sprintf("%s/32", addr), "table", fmt.Sprintf("%d", table)}
+	_, _ = a.exec(ctx, "ip", ruleArgs...)
+	addArgs := []string{"rule", "add", "from", fmt.Sprintf("%s/32", addr), "table", fmt.Sprintf("%d", table)}
+	if _, err := a.exec(ctx, "ip", addArgs...); err != nil {
+		// tolerate "File exists" to be idempotent
+		if !strings.Contains(err.Error(), "File exists") {
+			return errors.NewNetworkError("failed to install policy rule", err)
+		}
+	}
+
+	args := []string{"route", "replace", cidr, "dev", target, "table", fmt.Sprintf("%d", table), "metric", fmt.Sprintf("%d", metric)}
+	if addr != "" {
+		args = append(args, "src", addr)
+	}
+	if _, err := a.exec(ctx, "ip", args...); err != nil {
+		return errors.NewNetworkError("failed to install policy route", err)
+	}
+
+	return nil
+}
+
+// applySysctls tunes per-interface ARP/rp_filter to reduce ARP flux and strict RPF drops.
+func (a *NetplanAdapter) applySysctls(ctx context.Context, iface string) {
+	if a.opts.SetLooseRPFilter {
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.rp_filter", iface), "2")
+	}
+	if a.opts.SetArpSysctls {
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.arp_ignore", iface), "1")
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.arp_announce", iface), "2")
+	}
+}
+
+func (a *NetplanAdapter) setSysctl(ctx context.Context, key, value string) {
+	if _, err := a.exec(ctx, "sysctl", "-w", fmt.Sprintf("%s=%s", key, value)); err != nil {
+		a.logger.WithError(err).WithField("key", key).Debug("failed to set sysctl (ignored)")
+	}
+}
+
+func (a *NetplanAdapter) cleanupRouting(ctx context.Context, name string) {
+	if !a.opts.EnablePolicyRouting {
+		return
+	}
+	table := a.opts.routingTable(name)
+	if _, err := a.exec(ctx, "ip", "rule", "delete", "table", fmt.Sprintf("%d", table)); err != nil {
+		a.logger.WithError(err).WithField("table", table).Debug("failed to delete policy rule (ignored)")
+	}
+	if _, err := a.exec(ctx, "ip", "route", "flush", "table", fmt.Sprintf("%d", table)); err != nil {
+		a.logger.WithError(err).WithField("table", table).Debug("failed to flush policy routes (ignored)")
+	}
 }
 
 // extractInterfaceIndex extracts the index from interface name

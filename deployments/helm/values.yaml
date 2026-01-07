@@ -15,6 +15,16 @@ agent:
   preflightAllowUp: false
   # 최대 동시 처리 인터페이스 수 (라우팅 충돌 방지를 위해 기본값 1)
   maxConcurrentTasks: 1
+  network:
+    # 동일 CIDR 다중 NIC 대응: 소스 기반 정책 라우팅 on/off
+    policyRoutingEnabled: true
+    routingTableBase: 100
+    routeMetric: 100
+    # main 테이블에 connected route 생성 방지
+    useNoPrefixRoute: true
+    # ARP flux/RPF 완화용 sysctl
+    setArpSysctls: true
+    setLooseRpFilter: true
 
 # 리소스 제한
 resources:

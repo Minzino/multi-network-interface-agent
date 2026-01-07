@@ -13,6 +13,7 @@ type Config struct {
 	Database DatabaseConfig
 	Agent    AgentConfig
 	Health   HealthConfig
+	Network  NetworkConfig
 }
 
 // DatabaseConfig is a struct that holds database configuration
@@ -39,6 +40,16 @@ type AgentConfig struct {
     DataSource         string // 데이터 소스 선택: "db" | "nodecr"
     NodeCRNamespace    string // nodecr 선택 시, 조회할 네임스페이스 (기본: multinic-system)
     RunMode            string // "service"(default) or "job"
+}
+
+// NetworkConfig controls runtime networking behaviors for multinic interfaces
+type NetworkConfig struct {
+	PolicyRoutingEnabled bool
+	RoutingTableBase     int
+	RouteMetric          int
+	UseNoPrefixRoute     bool
+	SetArpSysctls        bool
+	SetLooseRPFilter     bool
 }
 
 // BackoffConfig is a struct that holds backoff configuration
@@ -98,6 +109,14 @@ func (l *EnvironmentConfigLoader) Load() (*Config, error) {
         Health: HealthConfig{
             Port: getEnvOrDefault("HEALTH_PORT", constants.DefaultHealthPort),
         },
+        Network: NetworkConfig{
+            PolicyRoutingEnabled: getEnvBoolOrDefault("NETWORK_POLICY_ROUTING_ENABLED", true),
+            RoutingTableBase:     getEnvIntOrDefault("NETWORK_ROUTING_TABLE_BASE", 100),
+            RouteMetric:          getEnvIntOrDefault("NETWORK_ROUTE_METRIC", 100),
+            UseNoPrefixRoute:     getEnvBoolOrDefault("NETWORK_NOPREFIXROUTE", true),
+            SetArpSysctls:        getEnvBoolOrDefault("NETWORK_SET_ARP_SYSCTLS", true),
+            SetLooseRPFilter:     getEnvBoolOrDefault("NETWORK_SET_RP_FILTER_LOOSE", true),
+        },
     }
 
 	// Validate configuration
@@ -138,6 +157,13 @@ func (l *EnvironmentConfigLoader) validate(config *Config) error {
 	}
 	if config.Agent.MaxRetries < 0 {
 		return errors.NewValidationError("invalid max retry count", nil)
+	}
+	// Network config validation
+	if config.Network.RoutingTableBase <= 0 {
+		return errors.NewValidationError("invalid routing table base", nil)
+	}
+	if config.Network.RouteMetric < 0 {
+		return errors.NewValidationError("invalid routing metric", nil)
 	}
 
 	// Validate health check configuration

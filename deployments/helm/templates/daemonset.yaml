@@ -49,6 +49,18 @@ spec:
           value: "{{ .Values.agent.backoff.maxInterval }}"
         - name: BACKOFF_MULTIPLIER
           value: "{{ .Values.agent.backoff.multiplier }}"
+        - name: NETWORK_POLICY_ROUTING_ENABLED
+          value: "{{ ternary "true" "false" (.Values.agent.network.policyRoutingEnabled | default true) }}"
+        - name: NETWORK_ROUTING_TABLE_BASE
+          value: "{{ .Values.agent.network.routingTableBase | default 100 | quote }}"
+        - name: NETWORK_ROUTE_METRIC
+          value: "{{ .Values.agent.network.routeMetric | default 100 | quote }}"
+        - name: NETWORK_NOPREFIXROUTE
+          value: "{{ ternary "true" "false" (.Values.agent.network.useNoPrefixRoute | default true) }}"
+        - name: NETWORK_SET_ARP_SYSCTLS
+          value: "{{ ternary "true" "false" (.Values.agent.network.setArpSysctls | default true) }}"
+        - name: NETWORK_SET_RP_FILTER_LOOSE
+          value: "{{ ternary "true" "false" (.Values.agent.network.setLooseRpFilter | default true) }}"
         livenessProbe:
           httpGet:
             path: /

@@ -13,6 +13,7 @@ type NetworkManagerFactory struct {
 	commandExecutor interfaces.CommandExecutor
 	fileSystem      interfaces.FileSystem
 	logger          *logrus.Logger
+	opts            Options
 }
 
 // NewNetworkManagerFactory creates a new NetworkManagerFactory
@@ -21,12 +22,14 @@ func NewNetworkManagerFactory(
 	executor interfaces.CommandExecutor,
 	fs interfaces.FileSystem,
 	logger *logrus.Logger,
+	opts Options,
 ) *NetworkManagerFactory {
 	return &NetworkManagerFactory{
 		osDetector:      osDetector,
 		commandExecutor: executor,
 		fileSystem:      fs,
 		logger:          logger,
+		opts:            opts.normalize(),
 	}
 }
 
@@ -41,17 +44,19 @@ func (f *NetworkManagerFactory) CreateNetworkConfigurer() (interfaces.NetworkCon
 
 	switch osType {
 	case interfaces.OSTypeUbuntu:
-		return NewNetplanAdapter(
+		return NewNetplanAdapterWithOptions(
 			f.commandExecutor,
 			f.fileSystem,
 			f.logger,
+			f.opts,
 		), nil
 
 	case interfaces.OSTypeRHEL:
-		return NewRHELAdapter(
+		return NewRHELAdapterWithOptions(
 			f.commandExecutor,
 			f.fileSystem,
 			f.logger,
+			f.opts,
 		), nil
 
 	default:

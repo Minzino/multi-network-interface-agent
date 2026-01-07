@@ -1,21 +1,40 @@
 apiVersion: multinic.io/v1alpha1
 kind: MultiNicNodeConfig
 metadata:
-  name: viola2-biz-worker01
+  name: new-k8s-worker1
   namespace: multinic-system
   labels:
-    multinic.io/node-name: viola2-biz-worker01
-    multinic.io/instance-id: b4975c5f-50bb-479f-9e7b-a430815ae852
+    multinic.io/node-name: new-k8s-worker1
+    multinic.io/instance-id: f840c53d-e1bd-4645-b855-c4b9a13d9fea
 spec:
-  nodeName: viola2-biz-worker01
-  instanceId: b4975c5f-50bb-479f-9e7b-a430815ae852
+  nodeName: new-k8s-worker1
+  instanceId: f840c53d-e1bd-4645-b855-c4b9a13d9fea
   interfaces:
     - id: 1
-      macAddress: "fa:16:3e:00:8a:71"
-      address: "11.11.11.188"
-      cidr: "11.11.11.0/24"
+      macAddress: "fa:16:3e:b8:03:1f"
+      address: "192.168.192.7"
+      cidr: "192.168.192.0/24"
       mtu: 1450
-#    - id: 2
+    - id: 2
+      macAddress: "fa:16:3e:d8:7d:98"
+      address: "192.168.192.176"
+      cidr: "192.168.192.0/24"
+      mtu: 1450
+    - id: 3
+      macAddress: "fa:16:3e:36:66:66"
+      address: "192.168.192.184"
+      cidr: "192.168.192.0/24"
+      mtu: 1450
+    - id: 4
+      macAddress: "fa:16:3e:b3:e6:a5"
+      address: "192.168.192.132"
+      cidr: "192.168.192.0/24"
+      mtu: 1450
+    - id: 5
+      macAddress: "fa:16:3e:e5:10:e9"
+      address: "192.168.192.162"
+      cidr: "192.168.192.0/24"
+      mtu: 1450
 #      macAddress: "fa:16:3e:e6:93:37"
 #      address: "11.11.11.82"
 #      cidr: "11.11.11.0/24"

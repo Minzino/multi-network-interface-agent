@@ -23,6 +23,7 @@ type RHELAdapter struct {
 	logger                 *logrus.Logger
 	isContainer            bool // indicates if running in container
 	enableSELinuxRestore   bool // whether to run restorecon on created files
+	opts                   Options
 }
 
 // NewRHELAdapter creates a new RHELAdapter.
@@ -31,7 +32,17 @@ func NewRHELAdapter(
 	fileSystem interfaces.FileSystem,
 	logger *logrus.Logger,
 ) *RHELAdapter {
-	return NewRHELAdapterWithSELinux(executor, fileSystem, logger, false)
+	return NewRHELAdapterWithOptions(executor, fileSystem, logger, DefaultOptions())
+}
+
+// NewRHELAdapterWithOptions creates a new RHELAdapter with explicit options.
+func NewRHELAdapterWithOptions(
+	executor interfaces.CommandExecutor,
+	fileSystem interfaces.FileSystem,
+	logger *logrus.Logger,
+	opts Options,
+) *RHELAdapter {
+	return NewRHELAdapterWithSELinux(executor, fileSystem, logger, false, opts)
 }
 
 // NewRHELAdapterWithSELinux creates a new RHELAdapter with SELinux restore option.
@@ -40,6 +51,7 @@ func NewRHELAdapterWithSELinux(
 	fileSystem interfaces.FileSystem,
 	logger *logrus.Logger,
 	enableSELinuxRestore bool,
+	opts Options,
 ) *RHELAdapter {
 	// Check if running in container by checking if /host exists
 	isContainer := false
@@ -53,6 +65,7 @@ func NewRHELAdapterWithSELinux(
 		logger:               logger,
 		isContainer:          isContainer,
 		enableSELinuxRestore: enableSELinuxRestore,
+		opts:                 opts.normalize(),
 	}
 }
 
@@ -118,10 +131,20 @@ func (a *RHELAdapter) Configure(ctx context.Context, iface entities.NetworkInter
     if addr := strings.TrimSpace(iface.Address()); addr != "" && strings.TrimSpace(iface.CIDR()) != "" {
         parts := strings.Split(iface.CIDR(), "/"); if len(parts) == 2 {
             full := fmt.Sprintf("%s/%s", addr, parts[1])
-            if _, err := a.execCommand(ctx, "ip", "addr", "replace", full, "dev", ifaceName); err != nil { return errors.NewNetworkError("Failed to set IPv4", err) }
+            args := []string{"addr", "replace", full, "dev", ifaceName}
+            if a.opts.UseNoprefixroute {
+                args = append(args, "noprefixroute")
+            }
+            if _, err := a.execCommand(ctx, "ip", args...); err != nil { return errors.NewNetworkError("Failed to set IPv4", err) }
         }
     }
     if _, err := a.execCommand(ctx, "ip", "link", "set", ifaceName, "up"); err != nil { return errors.NewNetworkError("Failed to set link up", err) }
+
+    // Policy routing per interface (keeps source-addressed traffic symmetric)
+    if a.opts.EnablePolicyRouting {
+        if err := a.applyPolicyRouting(ctx, iface, ifaceName); err != nil { return err }
+    }
+    a.applySysctls(ctx, ifaceName)
 
     // 4. Persist files: .link + .nmconnection with 9X prefix
     idx := extractIndexRHEL(ifaceName)
@@ -182,6 +205,7 @@ func (a *RHELAdapter) Rollback(ctx context.Context, name string) error {
     if err := a.fileSystem.Remove(nmPath); err != nil {
         a.logger.WithError(err).WithField("nm", nmPath).Debug("Error removing .nmconnection (ignored)")
     }
+    a.cleanupRouting(ctx, name)
     a.logger.WithField("interface", name).Info("RHEL interface rollback (files removed; no immediate reload)")
     return nil
 }
@@ -237,6 +261,72 @@ func (a *RHELAdapter) findDeviceByMAC(ctx context.Context, macAddress string) (s
 	return "", fmt.Errorf("no device found with MAC address %s", macAddress)
 }
 
+// applyPolicyRouting wires per-interface rule + route to keep traffic symmetric.
+func (a *RHELAdapter) applyPolicyRouting(ctx context.Context, iface entities.NetworkInterface, ifaceName string) error {
+	addr := strings.TrimSpace(iface.Address())
+	cidr := strings.TrimSpace(iface.CIDR())
+	if addr == "" || cidr == "" {
+		return nil
+	}
+	table := a.opts.routingTable(ifaceName)
+	metric := a.opts.routeMetric(ifaceName)
+
+	if a.opts.UseNoprefixroute {
+		if _, err := a.execCommand(ctx, "ip", "route", "del", cidr, "dev", ifaceName); err != nil {
+			a.logger.WithError(err).WithFields(logrus.Fields{"interface": ifaceName, "cidr": cidr}).Debug("ignored: failed to delete main-table route")
+		}
+	}
+
+	// Refresh rule: delete then add (replace may be unsupported on some versions)
+	_, _ = a.execCommand(ctx, "ip", "rule", "del", "from", fmt.Sprintf("%s/32", addr), "table", fmt.Sprintf("%d", table))
+	if _, err := a.execCommand(ctx, "ip", "rule", "add", "from", fmt.Sprintf("%s/32", addr), "table", fmt.Sprintf("%d", table)); err != nil {
+		// tolerate File exists to stay idempotent
+		if !strings.Contains(err.Error(), "File exists") {
+			return errors.NewNetworkError("failed to install policy rule", err)
+		}
+	}
+
+	args := []string{"route", "replace", cidr, "dev", ifaceName, "table", fmt.Sprintf("%d", table), "metric", fmt.Sprintf("%d", metric)}
+	if addr != "" {
+		args = append(args, "src", addr)
+	}
+	if _, err := a.execCommand(ctx, "ip", args...); err != nil {
+		return errors.NewNetworkError("failed to install policy route", err)
+	}
+
+	return nil
+}
+
+// applySysctls tunes per-interface ARP/rp_filter to reduce ARP flux and strict RPF drops.
+func (a *RHELAdapter) applySysctls(ctx context.Context, iface string) {
+	if a.opts.SetLooseRPFilter {
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.rp_filter", iface), "2")
+	}
+	if a.opts.SetArpSysctls {
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.arp_ignore", iface), "1")
+		a.setSysctl(ctx, fmt.Sprintf("net.ipv4.conf.%s.arp_announce", iface), "2")
+	}
+}
+
+func (a *RHELAdapter) setSysctl(ctx context.Context, key, value string) {
+	if _, err := a.execCommand(ctx, "sysctl", "-w", fmt.Sprintf("%s=%s", key, value)); err != nil {
+		a.logger.WithError(err).WithField("key", key).Debug("failed to set sysctl (ignored)")
+	}
+}
+
+func (a *RHELAdapter) cleanupRouting(ctx context.Context, ifaceName string) {
+	if !a.opts.EnablePolicyRouting {
+		return
+	}
+	table := a.opts.routingTable(ifaceName)
+	if _, err := a.execCommand(ctx, "ip", "rule", "delete", "table", fmt.Sprintf("%d", table)); err != nil {
+		a.logger.WithError(err).WithField("table", table).Debug("failed to delete policy rule (ignored)")
+	}
+	if _, err := a.execCommand(ctx, "ip", "route", "flush", "table", fmt.Sprintf("%d", table)); err != nil {
+		a.logger.WithError(err).WithField("table", table).Debug("failed to flush policy routes (ignored)")
+	}
+}
+
 // generateIfcfgContent generates the ifcfg file content
 func (a *RHELAdapter) generateNMConnection(iface entities.NetworkInterface, ifaceName string) string {
     b := &strings.Builder{}
@@ -251,6 +341,14 @@ func (a *RHELAdapter) generateNMConnection(iface entities.NetworkInterface, ifac
         parts := strings.Split(iface.CIDR(), "/"); if len(parts) == 2 {
             fmt.Fprintf(b, "address1=%s/%s\n", iface.Address(), parts[1])
         }
+    }
+    if a.opts.EnablePolicyRouting && iface.Address() != "" && iface.CIDR() != "" {
+        table := a.opts.routingTable(ifaceName)
+        metric := a.opts.routeMetric(ifaceName)
+        priority := 10000 + table
+        fmt.Fprintf(b, "route-table=%d\n", table)
+        fmt.Fprintf(b, "route1=%s,,%d\n", iface.CIDR(), metric)
+        fmt.Fprintf(b, "routing-rules=priority %d from %s/32 table %d\n", priority, iface.Address(), table)
     }
     fmt.Fprintf(b, "never-default=true\n\n[ipv6]\nmethod=ignore\n")
     return b.String()
