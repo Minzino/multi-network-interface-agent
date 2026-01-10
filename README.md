@@ -148,7 +148,7 @@ sequenceDiagram
 
 - **동시성 제어 최적화**:
   - 기본 최대 동시 작업 수: 1개 (안정성 우선)
-  - Helm values를 통한 설정 가능 (`maxConcurrentTasks`)
+- Helm values를 통한 설정 가능 (`agent.maxConcurrentTasks`)
   - 대규모 환경에서 라우팅 충돌 최소화
   
 
@@ -157,14 +157,14 @@ sequenceDiagram
 # 기본 설정 (안정성 최우선)
 helm upgrade --install multinic-agent ./deployments/helm \
   -n multinic-system \
-  --set image.tag=1.0.0 \
-  --set maxConcurrentTasks=1
+  --set image.tag=1.0.2 \
+  --set agent.maxConcurrentTasks=1
 
 # 대규모 환경 (성능 우선시)
 helm upgrade --install multinic-agent ./deployments/helm \
   -n multinic-system \
-  --set image.tag=1.0.0 \
-  --set maxConcurrentTasks=3
+  --set image.tag=1.0.2 \
+  --set agent.maxConcurrentTasks=3
 
 ```
 
@@ -198,7 +198,7 @@ multinic-agent/
 │   ├── application/          # 애플리케이션 계층
 │   │   └── usecases/        # ConfigureNetwork, DeleteNetwork
 │   ├── infrastructure/       # 인프라스트럭처 계층
-│   │   ├── persistence/     # MySQL Repository
+│   │   ├── persistence/     # NodeCR Repository (K8s CR 기반)
 │   │   ├── network/         # Netplan, RHEL Adapter
 │   │   ├── metrics/         # Prometheus 메트릭 수집
 │   │   └── config/         # 설정 관리
@@ -262,7 +262,7 @@ spec:
             properties:
               state:
                 type: string
-                enum: ["Pending", "Processing", "Configured", "Failed"]
+                enum: ["Pending", "InProgress", "Configured", "Failed"]
               lastProcessed:
                 type: string
               interfaceStatuses:
@@ -303,6 +303,7 @@ spec:
       mtu: 1450
 ```
 
+name은 선택사항이지만, 설정 시 id는 name의 인덱스로 해석됩니다.
 id는 0~9 범위이며 name(multinic0~9)과 동일한 인덱스로 맞추는 것을 권장합니다.
 
 ## 배포 방법
@@ -336,8 +337,8 @@ vi scripts/deploy.sh
 NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
 for node in "${NODES[@]}"; do
     echo "Deploying to $node..."
-    scp deployments/images/multinic-agent-1.0.0.tar root@$node:/tmp/
-    ssh root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
+    scp deployments/images/multinic-agent-1.0.2.tar root@$node:/tmp/
+    ssh root@$node "nerdctl load -i /tmp/multinic-agent-1.0.2.tar && rm /tmp/multinic-agent-1.0.2.tar"
 done
 
 # A-2: SSH Key를 사용하는 경우
@@ -345,24 +346,24 @@ NODES=(192.168.1.10 192.168.1.11 192.168.1.12)  # 실제 노드 IP로 변경
 SSH_KEY_PATH="~/.ssh/id_rsa"  # SSH private key 경로
 for node in "${NODES[@]}"; do
     echo "Deploying to $node..."
-    scp -i $SSH_KEY_PATH -o StrictHostKeyChecking=no deployments/images/multinic-agent-1.0.0.tar root@$node:/tmp/
-    ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no root@$node "nerdctl load -i /tmp/multinic-agent-1.0.0.tar && rm /tmp/multinic-agent-1.0.0.tar"
+    scp -i $SSH_KEY_PATH -o StrictHostKeyChecking=no deployments/images/multinic-agent-1.0.2.tar root@$node:/tmp/
+    ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no root@$node "nerdctl load -i /tmp/multinic-agent-1.0.2.tar && rm /tmp/multinic-agent-1.0.2.tar"
 done
 
 # A-3: 개별 노드에 수동 배포
-scp deployments/images/multinic-agent-1.0.0.tar root@192.168.1.10:/tmp/
-ssh root@192.168.1.10 "nerdctl load -i /tmp/multinic-agent-1.0.0.tar"
+scp deployments/images/multinic-agent-1.0.2.tar root@192.168.1.10:/tmp/
+ssh root@192.168.1.10 "nerdctl load -i /tmp/multinic-agent-1.0.2.tar"
 
 # A-4: 직접 빌드 (개발용)
-nerdctl build -t multinic-agent:1.0.0 .
+nerdctl build -t multinic-agent:1.0.2 .
 ```
 
 **방법 B: Nexus Registry 사용 (Registry 환경)**
 ```bash
 # B-1: Nexus에 이미지 푸시 (관리자 작업)
-nerdctl build -t multinic-agent:1.0.0 .
-nerdctl tag multinic-agent:1.0.0 nexus.your-domain.com:5000/multinic-agent:1.0.0
-nerdctl push nexus.your-domain.com:5000/multinic-agent:1.0.0
+nerdctl build -t multinic-agent:1.0.2 .
+nerdctl tag multinic-agent:1.0.2 nexus.your-domain.com:5000/multinic-agent:1.0.2
+nerdctl push nexus.your-domain.com:5000/multinic-agent:1.0.2
 
 # B-2: 인증이 필요한 경우 로그인
 nerdctl login nexus.your-domain.com:5000
@@ -392,7 +393,7 @@ kubectl get crd multinicnodeconfigs.multinic.io
 # Controller Deployment + RBAC + ServiceAccount 생성
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set image.tag=1.0.0 \
+  --set image.tag=1.0.2 \
   --set agent.metricsPort=18080 \
   --set agent.preflightAllowUp=false \
   --wait --timeout=300s
@@ -404,7 +405,7 @@ helm upgrade --install multinic-agent ./deployments/helm \
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
   --set image.repository=nexus.your-domain.com:5000/multinic-agent \
-  --set image.tag=1.0.0 \
+  --set image.tag=1.0.2 \
   --wait --timeout=300s
 
 # 다른 Registry 예시들:
@@ -428,7 +429,7 @@ kubectl get pods -n multinic-system -l app.kubernetes.io/name=multinic-agent-con
 # 차트 업그레이드
 helm upgrade multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set image.tag=1.0.1 \
+  --set image.tag=1.0.3 \
   --wait --timeout=300s
 ```
 
@@ -513,21 +514,29 @@ viola2-biz-master03   Configured
 #### 기본 성능 설정
 ```yaml
 # 동시성 제어 (안정성 vs 성능 균형)
-maxConcurrentTasks: 1          # 기본값: 안정성 우선 (1-10 권장)
+agent:
+  maxConcurrentTasks: 1        # 기본값: 안정성 우선 (1-10 권장)
 
 # 이미지 설정
 image:
   repository: multinic-agent
-  tag: "1.0.0"
+  tag: "1.0.2"
   pullPolicy: IfNotPresent
+
+# 컨트롤러 Job 보존 설정
+controller:
+  jobTTLSeconds: "3600"
+  jobDeleteDelaySeconds: "1800"
+  metricsPort: "9090"
 ```
 
-#### RHEL 환경 SELinux 설정
-```yaml
-# RHEL SELinux 지원 활성화
-rhelAdapter:
-  enableSELinuxRestore: false  # 기본값: 비활성화
-                              # true로 설정시 파일 생성 후 restorecon 자동 실행
+#### RHEL 환경 SELinux (수동 권장)
+
+SELinux enforcing 환경에서는 생성된 파일에 대해 `restorecon`을 권장합니다.
+
+```bash
+restorecon -Rv /etc/NetworkManager/system-connections
+restorecon -Rv /etc/systemd/network
 ```
 
 #### 리소스 및 보안 설정
@@ -553,7 +562,7 @@ securityContext:
 ```bash
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set maxConcurrentTasks=3 \
+  --set agent.maxConcurrentTasks=3 \
   --set image.pullPolicy=Always \
   --set resources.limits.cpu=1000m \
   --set resources.limits.memory=1Gi
@@ -563,7 +572,7 @@ helm upgrade --install multinic-agent ./deployments/helm \
 ```bash
 helm upgrade --install multinic-agent ./deployments/helm \
   --namespace multinic-system \
-  --set maxConcurrentTasks=1 \
+  --set agent.maxConcurrentTasks=1 \
   --set resources.limits.cpu=500m \
   --set resources.limits.memory=512Mi
 ```
