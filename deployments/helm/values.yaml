@@ -57,8 +57,8 @@ serviceAccount:
 # 컨트롤러 설정
 controller:
   enabled: true
-  jobTTLSeconds: "600"
+  jobTTLSeconds: "3600"
   # Job 삭제 지연(초): 종료 요약/로그 수집용으로 잠시 보존
-  jobDeleteDelaySeconds: "30"
+  jobDeleteDelaySeconds: "1800"
   # Prometheus metrics 포트
   metricsPort: "9090"
