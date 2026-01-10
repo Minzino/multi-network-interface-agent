@@ -10,27 +10,32 @@ spec:
   nodeName: new-k8s-worker1
   instanceId: f840c53d-e1bd-4645-b855-c4b9a13d9fea
   interfaces:
-    - id: 1
+    - id: 0
+      name: multinic0
       macAddress: "fa:16:3e:b8:03:1f"
       address: "192.168.192.7"
       cidr: "192.168.192.0/24"
       mtu: 1450
-    - id: 2
+    - id: 1
+      name: multinic1
       macAddress: "fa:16:3e:d8:7d:98"
       address: "192.168.192.176"
       cidr: "192.168.192.0/24"
       mtu: 1450
-    - id: 3
+    - id: 2
+      name: multinic2
       macAddress: "fa:16:3e:36:66:66"
       address: "192.168.192.184"
       cidr: "192.168.192.0/24"
       mtu: 1450
-    - id: 4
+    - id: 3
+      name: multinic3
       macAddress: "fa:16:3e:b3:e6:a5"
       address: "192.168.192.132"
       cidr: "192.168.192.0/24"
       mtu: 1450
-    - id: 5
+    - id: 4
+      name: multinic4
       macAddress: "fa:16:3e:e5:10:e9"
       address: "192.168.192.162"
       cidr: "192.168.192.0/24"

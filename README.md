@@ -247,6 +247,8 @@ spec:
                   properties:
                     id:
                       type: integer
+                    name:
+                      type: string
                     macAddress:
                       type: string
                     address:
@@ -288,11 +290,13 @@ spec:
   instanceId: b4975c5f-50bb-479f-9e7b-a430815ae852
   interfaces:
     - id: 1
+      name: multinic0
       macAddress: fa:16:3e:1c:1a:6e
       address: 11.11.11.37
       cidr: 11.11.11.0/24
       mtu: 1450
     - id: 2
+      name: multinic1
       macAddress: fa:16:3e:0a:17:3b
       address: 11.11.11.148
       cidr: 11.11.11.0/24

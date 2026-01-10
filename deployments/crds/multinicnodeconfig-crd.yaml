@@ -61,6 +61,10 @@ spec:
                       portId:
                         type: string
                         description: External provider port identifier
+                      name:
+                        type: string
+                        pattern: ^multinic[0-9]+$
+                        description: Optional desired interface name (multinic0-9)
                       macAddress:
                         type: string
                         pattern: ^([0-9A-Fa-f]{2}[:]){5}([0-9A-Fa-f]{2})$

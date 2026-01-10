@@ -35,6 +35,13 @@ func TestNetworkInterface_ConstructAndValidate(t *testing.T) {
         require.NoError(t, err)
         require.NoError(t, ni.Validate())
     })
+
+    t.Run("명시적 인터페이스 이름", func(t *testing.T) {
+        ni, err := NewNetworkInterfaceWithName(1, "multinic0", "00:11:22:33:44:55", "test-node", "1.1.1.1", "1.1.1.0/24", 1500)
+        require.NoError(t, err)
+        assert.Equal(t, "multinic0", ni.InterfaceName())
+        assert.True(t, ni.HasExplicitName())
+    })
 }
 
 func TestNetworkInterface_StatusMethods(t *testing.T) {

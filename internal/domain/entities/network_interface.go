@@ -20,6 +20,7 @@ type NetworkInterface struct {
 	cidr          *CIDR
 	mtu           *MTU
 	interfaceName *InterfaceName
+	explicitName  bool
 }
 
 // NewNetworkInterface creates a new NetworkInterface with validatio
@@ -75,6 +76,65 @@ func NewNetworkInterface(id int, macAddr, nodeNameStr, ipAddr, cidrStr string, m
 		cidr:          cidr,
 		mtu:           mtu,
 		interfaceName: interfaceName,
+		explicitName:  false,
+	}, nil
+}
+
+// NewNetworkInterfaceWithName creates a new NetworkInterface with an explicit interface name.
+// name이 제공되면 이름을 우선 적용하고, id는 순서 식별자로만 사용한다.
+func NewNetworkInterfaceWithName(id int, name, macAddr, nodeNameStr, ipAddr, cidrStr string, mtuValue int) (*NetworkInterface, error) {
+	// Validate and create value objects
+	interfaceIndex, err := NewInterfaceIndex(id)
+	if err != nil {
+		return nil, err
+	}
+
+	macAddress, err := NewMACAddress(macAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	nodeName, err := NewNodeName(nodeNameStr)
+	if err != nil {
+		return nil, err
+	}
+
+	ipAddress, err := NewIPAddress(ipAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	cidr, err := NewCIDR(cidrStr)
+	if err != nil {
+		return nil, err
+	}
+
+	mtu, err := NewMTU(mtuValue)
+	if err != nil {
+		return nil, err
+	}
+
+	interfaceName, err := NewInterfaceName(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate business rules
+	if !cidr.Contains(ipAddress) {
+		return nil, domainErrors.NewValidationErrorWithCode("VAL015",
+			fmt.Sprintf("IP address %s is not within CIDR %s", ipAddr, cidrStr), nil)
+	}
+
+	return &NetworkInterface{
+		id:            interfaceIndex,
+		macAddress:    macAddress,
+		nodeName:      nodeName,
+		status:        StatusPending,
+		ipAddress:     ipAddress,
+		cidr:          cidr,
+		mtu:           mtu,
+		interfaceName: interfaceName,
+		explicitName:  true,
 	}, nil
 }
 
@@ -109,6 +169,11 @@ func (ni *NetworkInterface) MTU() int {
 
 func (ni *NetworkInterface) InterfaceName() string {
 	return ni.interfaceName.String()
+}
+
+// HasExplicitName returns true if the interface name came from spec.
+func (ni *NetworkInterface) HasExplicitName() bool {
+	return ni.explicitName
 }
 
 // Business methods

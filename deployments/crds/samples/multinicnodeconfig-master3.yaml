@@ -11,6 +11,7 @@ spec:
   instanceId: 9c5667a1-6df1-4b27-9c4c-0db430a745ed
   interfaces:
     - id: 1
+      name: multinic0
       macAddress: "fa:16:3e:ba:51:f7"
       address: "11.11.11.159"
       cidr: "11.11.11.0/24"

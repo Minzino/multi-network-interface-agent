@@ -133,6 +133,7 @@ spec:
   instanceId: 098d1b84-e2eb-4164-b098-9e12b5fcfaaa
   interfaces:
   - id: 1
+    name: multinic0
     macAddress: fa:16:3e:2f:45:3c
     address: 192.168.192.25
     cidr: 192.168.192.0/24
@@ -165,6 +166,7 @@ Request example:
     "interfaces": [
       {
         "id": 1,
+        "name": "multinic0",
         "macAddress": "fa:16:3e:2f:45:3c",
         "address": "192.168.192.25",
         "cidr": "192.168.192.0/24",
@@ -266,4 +268,3 @@ Controller: update status
 - Validate preflight failure (in-use interface) returns FailedPartial.
 - Confirm operator does not write status.
 - Confirm name=nodeName and label instance-id are set.
-

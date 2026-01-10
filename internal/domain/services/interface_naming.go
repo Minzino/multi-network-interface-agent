@@ -141,6 +141,31 @@ func (s *InterfaceNamingService) ReserveNamesForInterfaces(ifaces []entities.Net
 
 	result := make(map[string]entities.InterfaceName)
 
+	// 0) 명시적으로 지정된 이름이 있으면 우선 예약
+	for _, iface := range ifaces {
+		if !iface.HasExplicitName() {
+			continue
+		}
+		name := iface.InterfaceName()
+		macLower := strings.ToLower(iface.MacAddress())
+		if _, exists := s.reservedByMac[macLower]; exists {
+			continue
+		}
+		if s.isNameTaken(name) {
+			existingMAC, err := s.GetMacAddressForInterface(name)
+			if err == nil && existingMAC != "" && !strings.EqualFold(existingMAC, iface.MacAddress()) {
+				return nil, fmt.Errorf("interface name %s is already used by %s", name, existingMAC)
+			}
+		}
+		if en, err := entities.NewInterfaceName(name); err != nil {
+			return nil, err
+		} else {
+			s.reservedByMac[macLower] = name
+			s.reservedNames[name] = true
+			result[macLower] = *en
+		}
+	}
+
 	// 1) 기존 multinicX 중 MAC이 일치하는 경우 재사용
 	for i := 0; i < 10; i++ {
 		name := fmt.Sprintf("multinic%d", i)
@@ -154,6 +179,9 @@ func (s *InterfaceNamingService) ReserveNamesForInterfaces(ifaces []entities.Net
 		macLower := strings.ToLower(mac)
 		// 요청 목록에 포함되는 MAC만 배정
 		for _, iface := range ifaces {
+			if _, exists := s.reservedByMac[macLower]; exists {
+				continue
+			}
 			if strings.EqualFold(iface.MacAddress(), macLower) || strings.EqualFold(strings.ToLower(iface.MacAddress()), macLower) {
 				if _, exists := s.reservedByMac[macLower]; !exists {
 					if en, err := entities.NewInterfaceName(name); err == nil {

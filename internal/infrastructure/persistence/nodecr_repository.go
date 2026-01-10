@@ -20,6 +20,7 @@ type NodeConfig struct {
 type NodeInterface struct {
     ID         int    `yaml:"id"`
     PortID     string `yaml:"portId"`
+    Name       string `yaml:"name"`
     MacAddress string `yaml:"macAddress"`
     Address    string `yaml:"address"`
     CIDR       string `yaml:"cidr"`
@@ -93,10 +94,21 @@ func (r *NodeCRRepository) loadAll(ctx context.Context, nodeName string) ([]enti
     var out []entities.NetworkInterface
     for i, ni := range cfg.Interfaces {
         id := ni.ID
-        if id == 0 {
+        if id == 0 && ni.Name != "" {
+            if parsed, err := entities.NewInterfaceName(ni.Name); err == nil {
+                id = parsed.Index()
+            }
+        }
+        if id == 0 && ni.Name == "" {
             id = i + 1
         }
-        ent, err := entities.NewNetworkInterface(id, ni.MacAddress, cfg.NodeName, ni.Address, ni.CIDR, ni.MTU)
+        var ent *entities.NetworkInterface
+        var err error
+        if ni.Name != "" {
+            ent, err = entities.NewNetworkInterfaceWithName(id, ni.Name, ni.MacAddress, cfg.NodeName, ni.Address, ni.CIDR, ni.MTU)
+        } else {
+            ent, err = entities.NewNetworkInterface(id, ni.MacAddress, cfg.NodeName, ni.Address, ni.CIDR, ni.MTU)
+        }
         if err != nil {
             r.logger.WithError(err).WithField("id", id).Warn("invalid interface entry in node config; skipping")
             continue

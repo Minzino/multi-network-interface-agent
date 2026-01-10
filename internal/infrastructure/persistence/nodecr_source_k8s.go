@@ -64,6 +64,9 @@ func unstructuredToNodeConfig(u *unstructured.Unstructured) *NodeConfig {
         if v, ok := m["portId"].(string); ok {
             ni.PortID = v
         }
+        if v, ok := m["name"].(string); ok {
+            ni.Name = v
+        }
         if v, ok := m["macAddress"].(string); ok {
             ni.MacAddress = v
         }
@@ -82,4 +85,3 @@ func unstructuredToNodeConfig(u *unstructured.Unstructured) *NodeConfig {
     }
     return cfg
 }
-
