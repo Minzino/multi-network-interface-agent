@@ -132,12 +132,14 @@ spec:
   nodeName: test-cluster-24
   instanceId: 098d1b84-e2eb-4164-b098-9e12b5fcfaaa
   interfaces:
-  - id: 1
+  - id: 0
     name: multinic0
     macAddress: fa:16:3e:2f:45:3c
     address: 192.168.192.25
     cidr: 192.168.192.0/24
     mtu: 1450
+
+> id는 0~9 범위이며 name(multinic0~9)과 동일한 인덱스로 맞추는 것을 권장합니다.
 
 ## 6. Middle API (Viola) Design
 
@@ -165,7 +167,7 @@ Request example:
     "instanceId": "098d1b84-e2eb-4164-b098-9e12b5fcfaaa",
     "interfaces": [
       {
-        "id": 1,
+        "id": 0,
         "name": "multinic0",
         "macAddress": "fa:16:3e:2f:45:3c",
         "address": "192.168.192.25",

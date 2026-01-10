@@ -94,7 +94,7 @@ func (r *NodeCRRepository) loadAll(ctx context.Context, nodeName string) ([]enti
     var out []entities.NetworkInterface
     for i, ni := range cfg.Interfaces {
         id := ni.ID
-        if id == 0 && ni.Name != "" {
+        if ni.Name != "" {
             if parsed, err := entities.NewInterfaceName(ni.Name); err == nil {
                 id = parsed.Index()
             }

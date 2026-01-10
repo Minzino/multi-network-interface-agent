@@ -10,7 +10,7 @@ spec:
   nodeName: viola2-biz-worker02
   instanceId: ba35d476-f810-45a8-b386-270712be6db3
   interfaces:
-    - id: 1
+    - id: 0
       name: multinic0
       macAddress: "fa:16:3e:b6:af:3e"
       address: "11.11.11.63"

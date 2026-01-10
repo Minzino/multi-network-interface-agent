@@ -57,7 +57,7 @@ spec:
                       id:
                         type: integer
                         minimum: 0
-                        description: Optional interface order identifier
+                        description: Optional interface order identifier (0-9 aligns with multinic0-9)
                       portId:
                         type: string
                         description: External provider port identifier

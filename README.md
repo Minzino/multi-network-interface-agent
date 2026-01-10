@@ -289,19 +289,21 @@ spec:
   nodeName: viola2-biz-worker01
   instanceId: b4975c5f-50bb-479f-9e7b-a430815ae852
   interfaces:
-    - id: 1
+    - id: 0
       name: multinic0
       macAddress: fa:16:3e:1c:1a:6e
       address: 11.11.11.37
       cidr: 11.11.11.0/24
       mtu: 1450
-    - id: 2
+    - id: 1
       name: multinic1
       macAddress: fa:16:3e:0a:17:3b
       address: 11.11.11.148
       cidr: 11.11.11.0/24
       mtu: 1450
 ```
+
+id는 0~9 범위이며 name(multinic0~9)과 동일한 인덱스로 맞추는 것을 권장합니다.
 
 ## 배포 방법
 
