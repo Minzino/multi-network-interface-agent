@@ -1,87 +1,64 @@
-# Multinic Agent 유지보수 가이드
+# Multinic Agent 코드 유지보수 가이드
 
-## 1. 목적
+이 문서는 운영이 아니라 **코드 유지보수 관점**에서 폴더/파일 역할과 수정 포인트를 정리합니다.
 
-- Biz 클러스터에 생성된 MultiNicNodeConfig CR을 감시합니다.
-- CR 기준으로 노드에 멀티 NIC를 구성하는 Job을 생성합니다.
-- Job 결과를 CR status로 반영하고, 실패 시 원인을 기록합니다.
+## 1. 디렉터리 구조
 
-## 2. 구성 요소
+- `cmd/`
+  - `agent/`: 노드에서 실행되는 에이전트 엔트리포인트.
+  - `controller/`: CR 감시/Job 생성 컨트롤러 엔트리포인트.
+- `internal/controller/`
+  - CR → Job 변환 및 상태 갱신 로직.
+- `internal/application/`
+  - 폴링/유스케이스 계층 (usecases, polling).
+- `internal/domain/`
+  - 엔티티/서비스/인터페이스/에러/상수 정의.
+- `internal/infrastructure/`
+  - 실제 구현체 (네트워크/컨테이너/헬스/메트릭/설정/퍼시스턴스/어댑터).
+- `deployments/`
+  - Helm 차트 및 CR 샘플.
+- `docs/`
+  - 추가 문서.
 
-- Controller: `internal/controller/reconciler.go`
-- Watcher: `internal/controller/watcher.go`
-- CRD 샘플: `deployments/crds/samples/`
-- Helm 차트: `deployments/helm`
+## 2. 핵심 파일/흐름
 
-## 3. 입력값(필수/권장)
+- `internal/controller/reconciler.go`
+  - MultiNicNodeConfig 기준 Job 생성 및 CR 상태 갱신.
+- `internal/controller/watcher.go`
+  - CR/Job/Pod 인포머 이벤트 처리.
+- `internal/controller/jobfactory.go`
+  - OS별 Job 스펙 빌더.
+- `cmd/controller/main.go`
+  - 컨트롤러 시작, 모드(watch/poll) 선택.
+- `cmd/agent/main.go`
+  - 실제 NIC 구성 로직 진입점.
 
-필수:
-- MultiNicNodeConfig CR
-  - `spec.nodeName` (없으면 `metadata.name` 사용)
-  - `spec.instanceId` (노드 UUID 검증용)
-  - `spec.interfaces[]` (macAddress/address/cidr/mtu)
+## 3. 자주 수정되는 포인트
 
-권장:
-- `spec.interfaces[].name` (`multinic0` ~ `multinic9`)
-- `spec.interfaces[].id` (0~9)
+- Job 스펙 변경
+  - `internal/controller/jobfactory.go`
+  - 필요한 env/volume/privilege 수정
 
-## 4. 동작 흐름(요약)
+- CR 상태 포맷 변경
+  - `internal/controller/reconciler.go` 상태 업데이트 부분
 
-1) CR add/update 이벤트 수신
-2) 노드 정보 조회 및 instanceId 매칭 검증
-3) Job 생성 (nodeName + generation 기반)
-4) Job 완료 시 CR status 업데이트
-5) 실패 시 종료 메시지 요약 적용
+- 에이전트 동작 변경
+  - `internal/application/` 및 `internal/infrastructure/`
+  - 실제 NIC 설정 로직은 infrastructure/network 쪽을 확인
 
-## 5. Job 처리 정책
-
-- Job 이름: `multinic-agent-<nodeName>-g<generation>`
-- 동일 generation의 Job이 이미 있으면 재생성하지 않습니다.
-- 완료된 Job은 TTL 또는 지연 삭제로 정리됩니다.
-
-## 6. CR 상태 업데이트
-
-- `status.state`: InProgress/Configured/Failed
-- `status.conditions`: InProgress/Ready/Failed 등
-- `status.interfaceStatuses`: 인터페이스별 상태
-- `status.observedGeneration`: 마지막 처리한 generation
-
-## 7. 배포/업데이트 절차
-
-### 7.1 이미지 빌드
+## 4. 빌드/테스트
 
 ```sh
-nerdctl build -t <registry>/multinic-agent:<tag> .
+go test ./...
 ```
 
-### 7.2 Helm 배포
+## 5. 배포 관련 파일(코드 관점)
 
-```sh
-helm upgrade --install multinic-agent deployments/helm \
-  -n multinic-system --create-namespace \
-  --set image.repository=<registry>/multinic-agent \
-  --set image.tag=<tag>
-```
+- Helm: `deployments/helm/`
+- CR 샘플: `deployments/crds/samples/`
 
-## 8. 장애 대응
-
-- CR Validation 실패
-  - interfaces[] 누락/필수 필드 확인
-- instanceId mismatch
-  - VM UUID와 노드 SystemUUID 일치 여부 확인
-- Job 생성 실패
-  - RBAC, ServiceAccount, 이미지 풀 권한 확인
-- 인터페이스 미구성
-  - 노드 NIC 존재 여부 및 macAddress 일치 확인
-
-## 9. 로그 확인
-
-```sh
-kubectl logs -n multinic-system deployment/multinic-agent-controller
-```
-
-## 10. 인계 포인트
+## 6. 인계 포인트
 
 - 핵심 로직: `internal/controller/reconciler.go`
 - 이벤트 처리: `internal/controller/watcher.go`
-- CR 예시: `deployments/crds/samples/`
+- Job 빌더: `internal/controller/jobfactory.go`
