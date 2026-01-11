@@ -31,7 +31,7 @@ type Controller struct {
 
 var nodeCRGVR = schema.GroupVersionResource{Group: "multinic.io", Version: "v1alpha1", Resource: "multinicnodeconfigs"}
 
-// Reconcile ensures a Job exists targeting the node specified by the MultiNicNodeConfig
+// Reconcile은 MultiNicNodeConfig 기준으로 Job을 생성하고 CR 상태를 갱신한다.
 func (c *Controller) Reconcile(ctx context.Context, namespace, name string) error {
     // Debug: log.Printf("reconcile: ns=%s name=%s", namespace, name) - removed for cleaner output
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -146,7 +146,7 @@ func normalizeUUID(s string) string {
     return strings.ToLower(strings.TrimSpace(s))
 }
 
-// ProcessAll lists all MultiNicNodeConfig in namespace and reconciles them
+// ProcessAll은 전체 CR을 순회하며 Job 생성과 상태 갱신을 수행한다.
 func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
     list, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
     if err != nil { return err }
@@ -166,7 +166,7 @@ func (c *Controller) ProcessAll(ctx context.Context, namespace string) error {
     return nil
 }
 
-// ProcessJobs scans Jobs and updates corresponding CR status based on Job completion
+// ProcessJobs는 Job 완료 상태를 확인해 CR 상태(Configured/Failed)를 갱신한다.
 func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
     jobs, err := c.Client.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/name=multinic-agent"})
     if err != nil { return err }
@@ -424,6 +424,7 @@ func (c *Controller) ProcessJobs(ctx context.Context, namespace string) error {
 }
 
 // getJobTerminationMessage는 Job의 Pod 종료 메시지를 반환합니다 (컨테이너 termination log)
+// getJobTerminationMessage는 Job Pod의 종료 메시지를 가져온다.
 func (c *Controller) getJobTerminationMessage(ctx context.Context, namespace, jobName string) string {
     pods, err := c.Client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + jobName})
     if err != nil || len(pods.Items) == 0 {
@@ -448,6 +449,7 @@ func (c *Controller) getJobTerminationMessage(ctx context.Context, namespace, jo
 }
 
 // logJobSummary는 종료 메시지(JSON)를 파싱하여 실패 인터페이스를 로그로 출력합니다
+// logJobSummary는 종료 메시지 요약을 로그로 남긴다.
 func (c *Controller) logJobSummary(msg string) {
     type failure struct {
         ID        int    `json:"id"`
@@ -476,6 +478,7 @@ func (c *Controller) logJobSummary(msg string) {
 }
 
 // deleteJob removes a Job by name, ignore errors
+// deleteJob은 지정 Job을 삭제한다.
 func (c *Controller) deleteJob(ctx context.Context, namespace, name string) error {
     policy := metav1.DeletePropagationBackground
     opts := metav1.DeleteOptions{PropagationPolicy: &policy}
@@ -488,12 +491,14 @@ func (c *Controller) deleteJob(ctx context.Context, namespace, name string) erro
 }
 
 // DeleteJobForNode removes job by node name with naming convention
+// DeleteJobForNode는 노드 이름 라벨 기준으로 Job을 찾아 삭제한다.
 func (c *Controller) DeleteJobForNode(ctx context.Context, namespace, nodeName string) {
     name := fmt.Sprintf("multinic-agent-%s", nodeName)
     _ = c.deleteJob(ctx, namespace, name)
 }
 
 // LaunchCleanupJob creates a cleanup-mode job for the given node
+// LaunchCleanupJob은 CR 삭제 시 인터페이스 정리를 위한 cleanup Job을 실행한다.
 func (c *Controller) LaunchCleanupJob(ctx context.Context, namespace, nodeName string) error {
     log.Printf("LaunchCleanupJob: starting cleanup job launch for node=%s namespace=%s", nodeName, namespace)
     
@@ -537,6 +542,7 @@ func (c *Controller) LaunchCleanupJob(ctx context.Context, namespace, nodeName s
 }
 
 // scheduleJobDeletion deletes a job now or after optional delay
+// scheduleJobDeletion은 지연 삭제를 예약한다.
 func (c *Controller) scheduleJobDeletion(ctx context.Context, namespace, name string) {
     if c.JobDeleteDelaySeconds <= 0 {
         _ = c.deleteJob(ctx, namespace, name)
@@ -549,6 +555,7 @@ func (c *Controller) scheduleJobDeletion(ctx context.Context, namespace, name st
     }()
 }
 
+// updateCRStatus는 상태 필드를 PATCH로 갱신한다.
 func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstructured, status map[string]any) error {
     obj := u.DeepCopy()
     // merge into status
@@ -571,6 +578,7 @@ func (c *Controller) updateCRStatus(ctx context.Context, u *unstructured.Unstruc
 }
 
 // ApplyTerminationSummary parses a termination summary JSON and updates CR per-interface status
+// ApplyTerminationSummary는 종료 메시지를 파싱해 인터페이스 상태를 부분 실패로 반영한다.
 func (c *Controller) ApplyTerminationSummary(ctx context.Context, namespace, nodeName, jobName, msg string) error {
     u, err := c.Dyn.Resource(nodeCRGVR).Namespace(namespace).Get(ctx, nodeName, metav1.GetOptions{})
     if err != nil { return err }
@@ -647,6 +655,7 @@ func computeSpecHash(u *unstructured.Unstructured) string {
 }
 
 // logInterfaceDetails logs detailed information about network interfaces from the CR
+// logInterfaceDetails는 최초 처리 시 인터페이스 목록을 로그로 남긴다.
 func (c *Controller) logInterfaceDetails(u *unstructured.Unstructured, nodeName string) {
     // Extract interfaces array from spec
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
@@ -705,6 +714,7 @@ func getIntFromMap(m map[string]interface{}, key string) int {
 
 // buildInterfaceStatuses creates detailed status information for each interface in the CR
 // Returns a list where each entry includes the interface name (multinic0, multinic1, etc.)
+// buildInterfaceStatuses는 spec.interfaces 기반으로 상태 배열을 생성한다.
 func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeName, status, reason string) []any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
@@ -759,6 +769,7 @@ func (c *Controller) buildInterfaceStatuses(u *unstructured.Unstructured, nodeNa
 }
 
 // getInterfaceNameForMAC attempts to determine the interface name (multinicX) for a given MAC address
+// getInterfaceNameForMAC은 MAC 주소로 interface name(multinicX)을 계산한다.
 func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
     if macAddress == "" {
         return ""
@@ -776,6 +787,7 @@ func (c *Controller) getInterfaceNameForMAC(macAddress string) string {
 
 // updateInterfaceStates periodically updates the interface states in the CR status 
 // by checking the actual node interface states via API or node status
+// updateInterfaceStates는 실제 노드 NIC 상태를 조회해 CR status를 보정한다.
 func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeName string) error {
     // Debug: log.Printf("updateInterfaceStates: checking interface states for node %s", nodeName)
     
@@ -816,6 +828,7 @@ func (c *Controller) updateInterfaceStates(ctx context.Context, namespace, nodeN
 
 // buildEnhancedInterfaceStatuses creates detailed status with actual system state check
 // Returns a list where each entry includes the interface name (multinic0, multinic1, etc.)
+// buildEnhancedInterfaceStatuses는 노드 상태를 반영한 interfaceStatuses를 생성한다.
 func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured, node *corev1.Node) []any {
     interfaces, found, err := unstructured.NestedSlice(u.Object, "spec", "interfaces")
     if !found || err != nil {
@@ -861,6 +874,7 @@ func (c *Controller) buildEnhancedInterfaceStatuses(u *unstructured.Unstructured
 }
 
 // getActualInterfaceState checks the actual state of an interface on the node
+// getActualInterfaceState는 노드 실제 인터페이스 상태를 계산한다.
 func (c *Controller) getActualInterfaceState(node *corev1.Node, macAddress, interfaceName string) string {
     // Check node conditions and capacity for network interface information
     
@@ -894,6 +908,7 @@ func (c *Controller) getActualInterfaceState(node *corev1.Node, macAddress, inte
 }
 
 // isNodeReady checks if the node is in Ready condition
+// isNodeReady는 노드 Ready 조건을 확인한다.
 func (c *Controller) isNodeReady(node *corev1.Node) bool {
     for _, condition := range node.Status.Conditions {
         if condition.Type == corev1.NodeReady {

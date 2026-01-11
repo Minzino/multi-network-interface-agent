@@ -23,7 +23,7 @@ type Watcher struct {
     Reconcile         func(ctx context.Context, namespace, name string) error
 }
 
-// NewWatcher creates a watcher instance
+// NewWatcher는 CR/Job/Pod 인포머를 묶어 Watcher를 구성한다.
 func NewWatcher(ctrl *Controller, namespace string) *Watcher {
     crInfFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(ctrl.Dyn, 0, namespace, nil)
     jobsInfFactory := informers.NewSharedInformerFactoryWithOptions(ctrl.Client, 0, informers.WithNamespace(namespace))
@@ -38,7 +38,7 @@ func NewWatcher(ctrl *Controller, namespace string) *Watcher {
     return w
 }
 
-// Start begins watching CRs and Jobs and blocks until ctx is done
+// Start는 인포머를 시작하고 종료될 때까지 블록한다.
 func (w *Watcher) Start(ctx context.Context) error {
     crInformer := w.CRInformerFactory.ForResource(nodeCRGVR).Informer()
     log.Printf("watcher starting for CRs and Jobs in ns=%s", w.Namespace)
@@ -87,14 +87,14 @@ func (w *Watcher) Start(ctx context.Context) error {
     return nil
 }
 
-// handleCR routes CR add/update to reconcile
+// handleCR은 CR add/update 이벤트를 Reconcile로 전달한다.
 func (w *Watcher) handleCR(obj interface{}) {
     u := unwrap(obj)
     if u != nil { _ = w.Reconcile(context.Background(), u.GetNamespace(), u.GetName()) }
     // attempt meta access via accessor if needed (omitted for brevity)
 }
 
-// handlePod reacts to Pod termination to harvest termination message before Job/Pod deletion
+// handlePod는 Pod 종료 메시지를 수집해 실패 요약을 CR에 반영한다.
 func (w *Watcher) handlePod(obj interface{}) {
     pod, ok := obj.(*corev1.Pod)
     if !ok || pod == nil { return }
@@ -126,7 +126,7 @@ func (w *Watcher) handlePod(obj interface{}) {
     }
 }
 
-// handleCRDelete cleans up any job for the node when CR is deleted
+// handleCRDelete는 CR 삭제 시 cleanup Job을 실행한다.
 func (w *Watcher) handleCRDelete(obj interface{}) {
     log.Printf("handleCRDelete: FUNCTION CALLED with obj type=%T", obj)
     u := unwrap(obj)
@@ -145,7 +145,7 @@ func (w *Watcher) handleCRDelete(obj interface{}) {
     }
 }
 
-// unwrap supports DeletedFinalStateUnknown and returns *unstructured.Unstructured if possible
+// unwrap은 DeletedFinalStateUnknown을 포함해 *unstructured.Unstructured로 변환한다.
 func unwrap(obj interface{}) *unstructured.Unstructured {
     switch t := obj.(type) {
     case *unstructured.Unstructured:
