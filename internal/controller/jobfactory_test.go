@@ -26,10 +26,10 @@ func TestBuildAgentJob_Ubuntu_MountsNetplanOnly(t *testing.T) {
     if len(vols) != 1 || vols[0].HostPath == nil || vols[0].HostPath.Path != "/etc/netplan" {
         t.Fatalf("expected one netplan volume; got %#v", vols)
     }
-    // tolerations for master/control-plane
+    // tolerations for master/control-plane/infra
     tols := job.Spec.Template.Spec.Tolerations
-    if len(tols) < 2 {
-        t.Fatalf("expected tolerations for control-plane/master taints")
+    if len(tols) < 3 {
+        t.Fatalf("expected tolerations for control-plane/master/infra taints")
     }
     // RUN_MODE=job env present
     foundRunMode := false

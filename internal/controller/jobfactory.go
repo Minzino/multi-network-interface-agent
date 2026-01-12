@@ -146,20 +146,26 @@ func BuildAgentJob(osImage string, p JobParams) *batchv1.Job {
                         },
                     },
                     Volumes: volumes,
-                    Tolerations: []corev1.Toleration{
-                        {
-                            Key:      "node-role.kubernetes.io/control-plane",
-                            Operator: corev1.TolerationOpExists,
-                            Effect:   corev1.TaintEffectNoSchedule,
-                        },
-                        {
-                            Key:      "node-role.kubernetes.io/master",
-                            Operator: corev1.TolerationOpExists,
-                            Effect:   corev1.TaintEffectNoSchedule,
-                        },
-                    },
-                },
-            },
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "node-role.kubernetes.io/control-plane",
+							Operator: corev1.TolerationOpExists,
+							Effect:   corev1.TaintEffectNoSchedule,
+						},
+						{
+							Key:      "node-role.kubernetes.io/master",
+							Operator: corev1.TolerationOpExists,
+							Effect:   corev1.TaintEffectNoSchedule,
+						},
+						{
+							Key:      "node",
+							Operator: corev1.TolerationOpEqual,
+							Value:    "infra",
+							Effect:   corev1.TaintEffectNoSchedule,
+						},
+					},
+				},
+			},
         },
     }
     return job
