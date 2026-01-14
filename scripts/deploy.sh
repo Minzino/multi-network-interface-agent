@@ -27,6 +27,7 @@ SSH_KEY_PATH=${SSH_KEY_PATH:-""}  # SSH Key 경로 (설정시 Key 인증 사용)
 SSH_USER=${SSH_USER:-"root"}
 CURRENT_NODE=${CURRENT_NODE:-"$(hostname)"}
 DEBUG=${DEBUG:-"false"}
+FORCE_CRD_REPLACE=${FORCE_CRD_REPLACE:-"false"} # 기존 CRD 강제 재생성 여부
 
 # 배포 모드 (tar | registry)
 DEPLOY_MODE=${DEPLOY_MODE:-"registry"}
@@ -218,13 +219,16 @@ if [ -f "$CRD_FILE" ]; then
     # 기존 CRD가 있는지 확인
     if kubectl get crd multinicnodeconfigs.multinic.io >/dev/null 2>&1; then
         echo -e "${YELLOW}기존 CRD 발견 - 업데이트 모드${NC}"
+        if [ "$FORCE_CRD_REPLACE" = "true" ]; then
+            # 기존 CRD 삭제 후 새로 생성 (스키마 변경 시 강제)
+            echo -e "${YELLOW}기존 CRD 삭제 중...${NC}"
+            kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
 
-        # 기존 CRD 삭제 후 새로 생성 (스키마 변경을 위해)
-        echo -e "${YELLOW}기존 CRD 삭제 중...${NC}"
-        kubectl delete crd multinicnodeconfigs.multinic.io --ignore-not-found=true
-
-        echo -e "${YELLOW}CRD 삭제 완료, 5초 대기 중...${NC}"
-        sleep 5
+            echo -e "${YELLOW}CRD 삭제 완료, 5초 대기 중...${NC}"
+            sleep 5
+        else
+            echo -e "${YELLOW}기존 CRD 유지 (FORCE_CRD_REPLACE=false)${NC}"
+        fi
     fi
 
     # 새 CRD 적용
@@ -252,6 +256,9 @@ if [ -f "$CRD_FILE" ]; then
             exit 1
         fi
     else
+        if [ "$FORCE_CRD_REPLACE" != "true" ]; then
+            echo -e "${YELLOW}⚠ CRD 적용 실패. 스키마 변경이 필요한 경우 FORCE_CRD_REPLACE=true로 재시도하세요.${NC}"
+        fi
         echo -e "${RED}✗ CRD 배포 실패${NC}"
         exit 1
     fi
