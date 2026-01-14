@@ -9,7 +9,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 MultiNIC Agent v1.0.0 배포 스크립트${NC}"
+echo -e "${GREEN}🚀 MultiNIC Agent 배포 스크립트${NC}"
 
 # 사용법:
 # SSH 패스워드 인증: SSH_PASSWORD="your_password" ./deploy.sh
@@ -17,8 +17,8 @@ echo -e "${GREEN}🚀 MultiNIC Agent v1.0.0 배포 스크립트${NC}"
 
 # 변수 설정
 IMAGE_NAME=${IMAGE_NAME:-"multinic-agent"}
-IMAGE_TAG=${IMAGE_TAG:-"1.0.0"}
-IMAGE_REPOSITORY=${IMAGE_REPOSITORY:-""}
+IMAGE_TAG=${IMAGE_TAG:-"dev-20260112043640"}
+IMAGE_REPOSITORY=${IMAGE_REPOSITORY:-"nexus.okestro-k8s.com:50000/multinic-agent"}
 IMAGE_PULL_POLICY=${IMAGE_PULL_POLICY:-"IfNotPresent"}
 NAMESPACE=${NAMESPACE:-"multinic-system"}
 RELEASE_NAME=${RELEASE_NAME:-"multinic-agent"}
@@ -29,8 +29,8 @@ CURRENT_NODE=${CURRENT_NODE:-"$(hostname)"}
 DEBUG=${DEBUG:-"false"}
 
 # 배포 모드 (tar | registry)
-DEPLOY_MODE=${DEPLOY_MODE:-"tar"}
-REGISTRY_HOST=${REGISTRY_HOST:-""}           # 예: nexus.local:5000
+DEPLOY_MODE=${DEPLOY_MODE:-"registry"}
+REGISTRY_HOST=${REGISTRY_HOST:-"nexus.okestro-k8s.com:50000"} # 예: nexus.local:5000
 REGISTRY_USERNAME=${REGISTRY_USERNAME:-""}   # 필요 시
 REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-""}   # 필요 시
 SKIP_TAR_LOAD=${SKIP_TAR_LOAD:-"false"}      # registry 모드에서 tar 로드 생략 가능
