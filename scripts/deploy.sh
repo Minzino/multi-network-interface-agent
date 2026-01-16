@@ -34,6 +34,10 @@ DEPLOY_MODE=${DEPLOY_MODE:-"registry"}
 REGISTRY_HOST=${REGISTRY_HOST:-"nexus.okestro-k8s.com:50000"} # 예: nexus.local:5000
 REGISTRY_USERNAME=${REGISTRY_USERNAME:-""}   # 필요 시
 REGISTRY_PASSWORD=${REGISTRY_PASSWORD:-""}   # 필요 시
+PUSH_REGISTRY_HOST=${PUSH_REGISTRY_HOST:-"$REGISTRY_HOST"} # push 전용 레지스트리 (분리 가능)
+PUSH_IMAGE_REPOSITORY=${PUSH_IMAGE_REPOSITORY:-""}        # push 이미지 저장소 (분리 가능)
+PULL_REGISTRY_HOST=${PULL_REGISTRY_HOST:-""}               # pull 전용 레지스트리 (분리 가능)
+IMAGE_PULL_SECRET_NAME=${IMAGE_PULL_SECRET_NAME:-"nexus-registry"}
 SKIP_TAR_LOAD=${SKIP_TAR_LOAD:-"false"}      # registry 모드에서 tar 로드 생략 가능
 DISTRIBUTE_TAR=${DISTRIBUTE_TAR:-"true"}     # tar 모드에서 원격 노드 배포 여부
 
@@ -69,6 +73,28 @@ if [ -z "$IMAGE_REPOSITORY" ]; then
         IMAGE_REPOSITORY="${IMAGE_NAME}"
     fi
 fi
+
+# push/pull 분리 설정
+if [ -z "$PUSH_REGISTRY_HOST" ]; then
+    PUSH_REGISTRY_HOST="$REGISTRY_HOST"
+fi
+
+if [ -z "$PUSH_IMAGE_REPOSITORY" ]; then
+    if [ -n "$PUSH_REGISTRY_HOST" ]; then
+        PUSH_IMAGE_REPOSITORY="${PUSH_REGISTRY_HOST}/${IMAGE_NAME}"
+    else
+        PUSH_IMAGE_REPOSITORY="${IMAGE_NAME}"
+    fi
+fi
+
+if [ -z "$PULL_REGISTRY_HOST" ]; then
+    if [[ "$IMAGE_REPOSITORY" == */* ]]; then
+        PULL_REGISTRY_HOST="${IMAGE_REPOSITORY%%/*}"
+    else
+        PULL_REGISTRY_HOST=""
+    fi
+fi
+
 # ===== 추가 끝 =====
 
 
@@ -76,7 +102,10 @@ fi
 ALL_NODES=($(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'))
 
 echo -e "배포 모드: ${BLUE}${DEPLOY_MODE}${NC}"
-echo -e "이미지: ${BLUE}${IMAGE_REPOSITORY}:${IMAGE_TAG}${NC}"
+echo -e "PULL 이미지: ${BLUE}${IMAGE_REPOSITORY}:${IMAGE_TAG}${NC}"
+if [ "$DEPLOY_MODE" = "registry" ]; then
+    echo -e "PUSH 이미지: ${BLUE}${PUSH_IMAGE_REPOSITORY}:${IMAGE_TAG}${NC}"
+fi
 echo -e "네임스페이스: ${BLUE}${NAMESPACE}${NC}"
 echo -e "클러스터 노드: ${BLUE}${ALL_NODES[*]}${NC}"
 
@@ -159,13 +188,32 @@ fi
 # 4. 이미지 배포 (tar | registry)
 echo -e "\n${BLUE}4. 이미지 배포${NC}"
 if [ "$DEPLOY_MODE" = "registry" ]; then
-    TARGET_IMAGE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-    echo -e "${YELLOW}Registry: ${TARGET_IMAGE}${NC}"
+    TARGET_IMAGE="${PUSH_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+    echo -e "${YELLOW}Registry(PUSH): ${TARGET_IMAGE}${NC}"
     if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ]; then
         echo -e "${YELLOW}Registry 로그인 중...${NC}"
-        echo "$REGISTRY_PASSWORD" | nerdctl login --username "$REGISTRY_USERNAME" --password-stdin "$REGISTRY_HOST"
+        echo "$REGISTRY_PASSWORD" | nerdctl login --username "$REGISTRY_USERNAME" --password-stdin "$PUSH_REGISTRY_HOST"
     fi
-    nerdctl tag "${IMAGE_NAME}:${IMAGE_TAG}" "$TARGET_IMAGE"
+
+    # 로컬에 있는 이미지 태그 탐색 (일반/registry 태그 모두 감지)
+    SOURCE_IMAGE=""
+    if nerdctl images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${IMAGE_NAME}:${IMAGE_TAG}$"; then
+        SOURCE_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+    elif nerdctl images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${PUSH_IMAGE_REPOSITORY}:${IMAGE_TAG}$"; then
+        SOURCE_IMAGE="${PUSH_IMAGE_REPOSITORY}:${IMAGE_TAG}"
+    elif nerdctl images --format "{{.Repository}}:{{.Tag}}" | grep -q "^${IMAGE_REPOSITORY}:${IMAGE_TAG}$"; then
+        SOURCE_IMAGE="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+    fi
+
+    if [ -z "$SOURCE_IMAGE" ]; then
+        echo -e "${RED}✗ 로컬 이미지가 없습니다: ${IMAGE_NAME}:${IMAGE_TAG} 또는 ${PUSH_IMAGE_REPOSITORY}:${IMAGE_TAG} 또는 ${IMAGE_REPOSITORY}:${IMAGE_TAG}${NC}"
+        nerdctl images | head -n 50
+        exit 1
+    fi
+
+    if [ "$SOURCE_IMAGE" != "$TARGET_IMAGE" ]; then
+        nerdctl tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
+    fi
     nerdctl push "$TARGET_IMAGE"
     echo -e "${GREEN}✓ Registry 푸시 완료${NC}"
 else
@@ -267,6 +315,22 @@ else
     exit 1
 fi
 
+
+# registry 인증이 필요한 경우 imagePullSecret 생성
+HELM_EXTRA_ARGS=""
+PULL_SECRET_REGISTRY_HOST="$PULL_REGISTRY_HOST"
+if [ -z "$PULL_SECRET_REGISTRY_HOST" ]; then
+    PULL_SECRET_REGISTRY_HOST="$REGISTRY_HOST"
+fi
+if [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_PASSWORD" ] && [ -n "$PULL_SECRET_REGISTRY_HOST" ]; then
+    kubectl -n $NAMESPACE create secret docker-registry $IMAGE_PULL_SECRET_NAME \
+        --docker-server=$PULL_SECRET_REGISTRY_HOST \
+        --docker-username=$REGISTRY_USERNAME \
+        --docker-password=$REGISTRY_PASSWORD \
+        --dry-run=client -o yaml | kubectl apply -f -
+    HELM_EXTRA_ARGS="--set imagePullSecrets[0].name=${IMAGE_PULL_SECRET_NAME}"
+fi
+
 # 6. Helm 차트 배포 (이제 CRD Hook 불필요)
 echo -e "\n${BLUE}6. Helm 차트 배포${NC}"
 if helm upgrade --install $RELEASE_NAME ./deployments/helm \
@@ -274,6 +338,7 @@ if helm upgrade --install $RELEASE_NAME ./deployments/helm \
     --set image.repository=${IMAGE_REPOSITORY} \
     --set image.tag=${IMAGE_TAG} \
     --set image.pullPolicy=${IMAGE_PULL_POLICY} \
+    ${HELM_EXTRA_ARGS} \
     --wait --timeout=300s; then
     echo -e "${GREEN}✓ Helm 차트 배포 완료${NC}"
 else
